@@ -1,5 +1,4 @@
-#include "common.cl"
-#include "grid.cl"
+
 
 float compute_density_with_grid(
     size_t current_particle_index, global const particle* others,

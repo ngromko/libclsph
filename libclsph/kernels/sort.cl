@@ -39,7 +39,7 @@ void kernel sort_count(global const particle* particles,
 }
 
 void kernel sort(global const particle* in_particles,
-                 global particle* out_particles, global size_t* start_indices,
+                 global particle* out_particles, global uint* start_indices,
                  simulation_parameters params, int thread_count,
                  int pass_number, int radix_width) {
   const size_t work_item_id = get_global_id(0);

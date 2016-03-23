@@ -1,4 +1,4 @@
-#include "common.cl"
+
 
 typedef struct {
   float3 position, next_velocity;
@@ -92,7 +92,7 @@ int respond(collision_response* response, collision c, float restitution,
             float time_elapsed) {
   // hack to avoid points directly on the faces, the collision detection code
   // should be
-  response->position = c.collision_point - (c.surface_normal * 0.001);
+  response->position = c.collision_point - (c.surface_normal * 0.001f);
 
   response->next_velocity -=
       (1.f +

@@ -1,7 +1,4 @@
-#ifndef _GRID_H_
-#define _GRID_H_
 
-#include "common.cl"
 
 uint2 get_start_end_indices_for_cell(uint cell_index,
                                      global const unsigned int* cell_table,
@@ -65,4 +62,4 @@ void kernel locate_in_grid(global const particle* particles,
 
   out_particles[current_particle_index].grid_index = grid_index;
 }
-#endif
+

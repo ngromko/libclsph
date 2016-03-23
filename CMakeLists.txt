@@ -1,8 +1,16 @@
 cmake_minimum_required(VERSION 2.6)
 project(libclsph)
 
+# Concat Files
+function(cat IN_FILE OUT_FILE)
+  file(READ ${IN_FILE} CONTENTS)
+  file(APPEND ${OUT_FILE} "${CONTENTS}")
+endfunction()
+
 # User provided build options
 option(BUILD_EXAMPLES "Build examples" ON)
+
+set(PROJECT_BINARY_DIR "bin")
 
 # Check if OpenCL is present on the system
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
@@ -21,7 +29,20 @@ file(COPY libclsph/file_save_delegates/houdini_file_saver.h DESTINATION ${PROJEC
 file(COPY util DESTINATION ${PROJECT_BINARY_DIR}/include/clsph)
 
 # Copy kernels, shader and properties files
-file(COPY libclsph/kernels DESTINATION ${PROJECT_BINARY_DIR}/examples)
+file(WRITE libclsph/kernels/sph.cl "" )
+cat( libclsph/kernels/common.cl libclsph/kernels/sph.cl)
+cat( libclsph/common/structures.h libclsph/kernels/sph.cl)
+cat( libclsph/common/util.h libclsph/kernels/sph.cl)
+cat( libclsph/kernels/smoothing.cl libclsph/kernels/sph.cl)
+cat( libclsph/kernels/grid.cl libclsph/kernels/sph.cl)
+cat( libclsph/kernels/forces.cl libclsph/kernels/sph.cl)
+cat( libclsph/kernels/collisionsv2.cl libclsph/kernels/sph.cl)
+cat( libclsph/kernels/sort.cl libclsph/kernels/sph.cl)
+cat( libclsph/kernels/advection.cl libclsph/kernels/sph.cl)
+cat( libclsph/kernels/sphb.cl libclsph/kernels/sph.cl)
+cat( libclsph/kernels/reduction.cl libclsph/kernels/sph.cl)
+
+file(COPY libclsph/kernels/sph.cl DESTINATION ${PROJECT_BINARY_DIR}/examples/kernels)
 file(COPY shaders DESTINATION ${PROJECT_BINARY_DIR}/examples)
 file(COPY simulation_properties DESTINATION ${PROJECT_BINARY_DIR}/examples)
 file(COPY scenes DESTINATION ${PROJECT_BINARY_DIR}/examples)
@@ -52,9 +73,9 @@ if(BUILD_EXAMPLES)
     set_target_properties(clsphparticles PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/examples)
     target_link_libraries(clsphparticles clsph)
 
-    find_package(OpenGL)
-    find_package(GLEW)
-    find_package(GLFW)
+    #find_package(OpenGL)
+    #find_package(GLEW)
+    #find_package(GLFW)
 
     # OpenGL rendered example requires OpenGL, GLEW and GLFW
     if(OPENGL_FOUND AND GLEW_FOUND AND GLFW_FOUND)

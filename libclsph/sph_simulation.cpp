@@ -112,10 +112,10 @@ void sph_simulation::sort_particles(particle* particles,
   cl::Buffer* current_output_buffer = &second_buffer;
 
   for (int pass_number = 0; pass_number < 4; ++pass_number) {
-    unsigned int zero = 0;
-    check_cl_error(queue_.enqueueFillBuffer(
-        sort_count_buffer_, zero, 0,
-        kSortThreadCount * kBucketCount * sizeof(int)));
+
+    check_cl_error(queue_.enqueueNDRangeKernel(
+        kernel_fill_uint_array_, cl::NullRange, cl::NDRange(kSortThreadCount * kBucketCount),
+        cl::NullRange));
 
     set_kernel_args(kernel_sort_count_, *current_input_buffer,
                     sort_count_buffer_, parameters, kSortThreadCount,
@@ -149,7 +149,7 @@ void sph_simulation::sort_particles(particle* particles,
     check_cl_error(queue_.enqueueNDRangeKernel(kernel_sort_, cl::NullRange,
                                                cl::NDRange(kSortThreadCount),
                                                cl::NullRange));
-
+check_cl_error(queue_.finish());
     cl::Buffer* tmp = current_input_buffer;
     current_input_buffer = current_output_buffer;
     current_output_buffer = tmp;
@@ -256,14 +256,16 @@ void sph_simulation::simulate_single_frame(particle* in_particles,
 
   set_kernel_args(kernel_locate_in_grid_, front_buffer_, back_buffer_,
                   parameters);
-
+check_cl_error(queue_.finish());
   check_cl_error(queue_.enqueueNDRangeKernel(
       kernel_locate_in_grid_, cl::NullRange,
       cl::NDRange(parameters.particles_count), cl::NDRange(size_of_groups)));
+      check_cl_error(queue_.finish());
 
   check_cl_error(queue_.enqueueReadBuffer(
       back_buffer_, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
       out_particles));
+      check_cl_error(queue_.finish());
 
   sort_particles(out_particles, back_buffer_, front_buffer_, cell_table);
 
@@ -281,13 +283,13 @@ void sph_simulation::simulate_single_frame(particle* in_particles,
 
   // Compute the density and the pressure term at every particle.
   check_cl_error(kernel_density_pressure_.setArg(0, front_buffer_));
-  check_cl_error(kernel_density_pressure_.setArg(
+  /*check_cl_error(kernel_density_pressure_.setArg(
       1, size_of_groups * sizeof(particle),
-      nullptr));  // Declare local memory in arguments
-  check_cl_error(kernel_density_pressure_.setArg(2, back_buffer_));
-  check_cl_error(kernel_density_pressure_.setArg(3, parameters));
-  check_cl_error(kernel_density_pressure_.setArg(4, precomputed_terms));
-  check_cl_error(kernel_density_pressure_.setArg(5, cell_table_buffer));
+      nullptr));  // Declare local memory in arguments*/
+  check_cl_error(kernel_density_pressure_.setArg(1, back_buffer_));
+  check_cl_error(kernel_density_pressure_.setArg(2, parameters));
+  check_cl_error(kernel_density_pressure_.setArg(3, precomputed_terms));
+  check_cl_error(kernel_density_pressure_.setArg(4, cell_table_buffer));
 
   check_cl_error(queue_.enqueueNDRangeKernel(
       kernel_density_pressure_, cl::NullRange,
@@ -369,6 +371,9 @@ void sph_simulation::simulate(int frame_count) {
   kernel_locate_in_grid_ = make_kernel(program, "locate_in_grid");
   kernel_sort_count_ = make_kernel(program, "sort_count");
   kernel_sort_ = make_kernel(program, "sort");
+  kernel_fill_uint_array_ = make_kernel(program, "fillUintArray");
+
+
 
   front_buffer_ =
       cl::Buffer(context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
@@ -378,6 +383,11 @@ void sph_simulation::simulate(int frame_count) {
   sort_count_buffer_ =
       cl::Buffer(context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
                  sizeof(unsigned int) * kSortThreadCount * kBucketCount);
+
+   check_cl_error(kernel_fill_uint_array_.setArg(0,sort_count_buffer_));
+  check_cl_error(kernel_fill_uint_array_.setArg(1,0));
+  check_cl_error(kernel_fill_uint_array_.setArg(2,kSortThreadCount * kBucketCount));
+
 
   particle* particles = new particle[parameters.particles_count];
   init_particles(particles, parameters);

@@ -39,6 +39,7 @@ class sph_simulation {
   cl::Kernel kernel_locate_in_grid_;
   cl::Kernel kernel_sort_count_;
   cl::Kernel kernel_sort_;
+  cl::Kernel kernel_fill_uint_array_;
 
   cl::Buffer front_buffer_;
   cl::Buffer back_buffer_;

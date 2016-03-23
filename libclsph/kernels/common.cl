@@ -1,7 +1,8 @@
-#ifndef _COMMON_CL_H_
-#define _COMMON_CL_H_
-
 #define KERNEL_INCLUDE
-#include "../common/structures.h"
-#include "../common/util.h"
-#endif
+
+void kernel fillUintArray(global uint* bob ,uint value,int length){
+    uint id = get_global_id(0);
+    if(id<length)
+        bob[id]=value;
+}
+
