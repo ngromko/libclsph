@@ -15,16 +15,14 @@
 
 typedef struct {
   cl_uint particles_count;
-  cl_float max_velocity;
   cl_float fluid_density;
   cl_float total_mass;
   cl_float particle_mass;
   cl_float dynamic_viscosity;
   cl_float simulation_time;
-  cl_float target_fps;
   cl_float h;
   cl_float simulation_scale;
-  cl_float time_delta;
+  cl_float target_fps;
   cl_float surface_tension_threshold;
   cl_float surface_tension;
   cl_float restitution;

@@ -29,8 +29,6 @@ int main(int argc, char** argv) {
         std::exit(-1);
     }
 
-    int i = 0;
-
     simulation.pre_frame = [&] (particle* particles, const simulation_parameters& params, bool full_frame) {
         if(simulation.write_intermediate_frames != full_frame) {
             saver.writeFrameToFile(particles, params);
@@ -42,32 +40,13 @@ int main(int argc, char** argv) {
             cereal::BinaryOutputArchive archive(file_out);
             archive.saveBinary(particles,sizeof(particle)*params.particles_count);
         }
-
-        ++i;
-
-        int num_frames = 
-            params.simulation_time / (params.time_delta * params.simulation_scale);
-
-        int progress = i * 80 / num_frames;
-
-        std::cout << "[";
-        for(int j = 0; j < 80; ++j) {
-            if(j < progress) {
-                std::cout << "-";
-            } else {
-                std::cout << " ";
-            }
-        }
-        std::cout << "] " << i << "/" << num_frames << std::endl;
-
     };
 
-    std::cout << std::endl << 
+    std::cout << std::endl <<
         "Loaded parameters          " << std::endl <<
         "-----------------          " << std::endl <<
         "Simulation time:           " << simulation.parameters.simulation_time << std::endl <<
         "Target FPS:                " << simulation.parameters.target_fps << std::endl <<
-        "Time delta:                " << simulation.parameters.time_delta << std::endl <<
         "Simulation scale:          " << simulation.parameters.simulation_scale << std::endl <<
         "Write intermediate frames: " << (simulation.write_intermediate_frames ? "true" : "false") << std::endl <<
         "Serialize frames:          " << (simulation.serialize ? "true" : "false") << std::endl <<
@@ -118,7 +97,7 @@ int main(int argc, char** argv) {
         fb.close();
     }
 
-    std::cout << std::endl << 
+    std::cout << std::endl <<
         "Revise simulation parameters.  Press q to quit, any other key to proceed with simulation" << std::endl;
 
     char response;

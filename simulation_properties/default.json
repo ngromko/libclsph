@@ -1,7 +1,7 @@
 {
     "particles_count" : 32000,
     "particle_mass" : 0.05,
-    "simulation_time" : 10,
+    "simulation_time" : 3,
     "target_fps" : 60,
     "simulation_scale" : 0.1,
     "write_all_frames" : false,

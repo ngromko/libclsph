@@ -170,8 +170,9 @@ check_cl_error(queue_.finish());
   }
 }
 
-void sph_simulation::simulate_single_frame(particle* in_particles,
-                                           particle* out_particles) {
+float sph_simulation::simulate_single_frame(particle* in_particles,
+                                           particle* out_particles,
+                                           float dt) {
   // Calculate the optimal size for workgroups
 
   // Start groups size at their maximum, make them smaller if necessary
@@ -328,27 +329,33 @@ check_cl_error(queue_.finish());
       kernel_forces_, cl::NullRange, cl::NDRange(parameters.particles_count),
       cl::NDRange(size_of_groups)));
 
-  // Advect particles and resolve collisions with scene geometry.
   set_kernel_args(kernel_advection_collision_, front_buffer_, back_buffer_,
-                  parameters, precomputed_terms, cell_table_buffer,
+                  parameters.restitution,dt, precomputed_terms, cell_table_buffer,
                   face_normals_buffer, vertices_buffer, indices_buffer,
                   current_scene.face_count);
 
-  check_cl_error(queue_.enqueueNDRangeKernel(
-      kernel_advection_collision_, cl::NullRange,
-      cl::NDRange(parameters.particles_count), cl::NDRange(size_of_groups)));
+  // Advect particles and resolve collisions with scene geometry.
+  float cumputedTime = dt;
+  do{
+      dt= cumputedTime;
+      check_cl_error(kernel_advection_collision_.setArg(3, dt));
+      check_cl_error(queue_.enqueueNDRangeKernel(
+          kernel_advection_collision_, cl::NullRange,
+          cl::NDRange(parameters.particles_count), cl::NDRange(size_of_groups)));
 
-  check_cl_error(queue_.enqueueReadBuffer(
-      back_buffer_, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
-      out_particles));
+      cumputedTime= computeTimeStep(back_buffer_);
+  }while(dt-cumputedTime>0.00001);
+
+    check_cl_error(queue_.enqueueReadBuffer(
+        back_buffer_, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
+        out_particles));
 
   delete[] cell_table;
+
+  return cumputedTime;
 }
 
-void sph_simulation::simulate(int frame_count) {
-  if (frame_count == 0) {
-    frame_count = (int)ceil(parameters.simulation_time * parameters.target_fps);
-  }
+void sph_simulation::simulate() {
 
   cl_int cl_error;
 
@@ -372,8 +379,8 @@ void sph_simulation::simulate(int frame_count) {
   kernel_sort_count_ = make_kernel(program, "sort_count");
   kernel_sort_ = make_kernel(program, "sort");
   kernel_fill_uint_array_ = make_kernel(program, "fillUintArray");
-
-
+  kernel_maximum_vit = make_kernel(program, "maximum_vit");
+  kernel_maximum_accel = make_kernel(program, "maximum_accel");
 
   front_buffer_ =
       cl::Buffer(context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
@@ -384,26 +391,53 @@ void sph_simulation::simulate(int frame_count) {
       cl::Buffer(context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
                  sizeof(unsigned int) * kSortThreadCount * kBucketCount);
 
-   check_cl_error(kernel_fill_uint_array_.setArg(0,sort_count_buffer_));
+  check_cl_error(kernel_fill_uint_array_.setArg(0,sort_count_buffer_));
   check_cl_error(kernel_fill_uint_array_.setArg(1,0));
   check_cl_error(kernel_fill_uint_array_.setArg(2,kSortThreadCount * kBucketCount));
-
 
   particle* particles = new particle[parameters.particles_count];
   init_particles(particles, parameters);
 
-  for (int i = 0; i < frame_count; ++i) {
+  //Get number of groups for reduction
+  max_size_of_groups = size_of_groups = running_device->getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>();
+  max_unit= running_device->getInfo<CL_DEVICE_MAX_COMPUTE_UNITS>();
+
+  //while(parameters.particles_count%size_of_groups!=0)
+  while((parameters.particles_count%size_of_groups!=0) || (size_of_groups*sizeof(particle) > running_device->getInfo<CL_DEVICE_LOCAL_MEM_SIZE>()))
+  {
+    size_of_groups /= 2;
+  }
+
+  //Make sure that the workgroups are small enough and that the particle data will fit in local memory
+  assert( size_of_groups <= running_device->getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>() );
+  assert( size_of_groups*sizeof(particle) <= running_device->getInfo<CL_DEVICE_LOCAL_MEM_SIZE>() );
+
+  float time = 0.0;
+  float timeperframe = 1.0f/parameters.target_fps;
+  int currentFrame = 2;
+  float dt = timeperframe*parameters.simulation_scale;
+
+  while(time<parameters.simulation_time)
+  {
+    std::cout << "Simulating frame " << currentFrame << " (" << time<< "s)" << std::endl;
     if (pre_frame) {
       pre_frame(particles, parameters, true);
     }
+    float timeleft=timeperframe;
 
-    for (int j = 0; (float)j < (1.f / parameters.simulation_scale); ++j) {
+    while(timeleft > 0.0) {
       if (pre_frame) pre_frame(particles, parameters, false);
 
-      simulate_single_frame(particles, particles);
-
+      dt=simulate_single_frame(particles, particles,dt);
+      timeleft-=dt;
+      if(timeleft<dt){
+          dt=timeleft;
+      }
+      std::cout<<"temps restant pour la frame :"<<timeleft<<std::endl;
       if (post_frame) post_frame(particles, parameters, false);
     }
+    time+=timeperframe;
+    ++currentFrame;
 
     if (post_frame) {
       post_frame(particles, parameters, true);
@@ -476,8 +510,7 @@ void sph_simulation::load_settings(std::string fluid_file_name,
     parameters.target_fps =
         (float)(sim_params.get<picojson::object>()["target_fps"].get<double>());
     parameters.simulation_scale =
-        (float)(sim_params.get<picojson::object>()["simulation_scale"]
-                    .get<double>());
+        (float)(sim_params.get<picojson::object>()["simulation_scale"].get<double>());
 
     parameters.constant_acceleration.s[0] =
         (float)(sim_params.get<picojson::object>()["constant_acceleration"]
@@ -502,9 +535,6 @@ void sph_simulation::load_settings(std::string fluid_file_name,
   parameters.h = cbrtf(3.f * (particles_inside_influence_radius *
                               (initial_volume / parameters.particles_count)) /
                        (4.f * M_PI));
-  parameters.time_delta = 1.f / parameters.target_fps;
-
-  parameters.max_velocity = 0.8f * parameters.h / parameters.time_delta;
 
   precomputed_terms.poly_6 = 315.f / (64.f * M_PI * pow(parameters.h, 9.f));
   precomputed_terms.poly_6_gradient =
@@ -513,4 +543,91 @@ void sph_simulation::load_settings(std::string fluid_file_name,
       -945.f / (32.f * M_PI * pow(parameters.h, 9.f));
   precomputed_terms.spiky = -45.f / (M_PI * pow(parameters.h, 6.f));
   precomputed_terms.viscosity = 45.f / (M_PI * pow(parameters.h, 6.f));
+}
+
+//--------------------------------------------------------------------------------------------------
+// computeTimeStep
+float sph_simulation::computeTimeStep( cl::Buffer& input_buffer)
+{
+    // Find maximum velocity and acceleration
+   float redresult[max_unit];
+   float dt;
+
+    cl::Buffer reducResult(
+        context_,
+        CL_MEM_READ_WRITE ,
+        sizeof(float) * max_unit);
+
+
+    //-----------------------------------------------------
+    // Find minimum postion
+    //-----------------------------------------------------
+    check_cl_error(kernel_maximum_vit.setArg(0, input_buffer));
+    check_cl_error(kernel_maximum_vit.setArg(1, max_size_of_groups * sizeof(float), NULL)); //Declare local memory in arguments
+    check_cl_error(kernel_maximum_vit.setArg(2, parameters.particles_count));
+    check_cl_error(kernel_maximum_vit.setArg(3, reducResult));
+
+    check_cl_error(
+            queue_.enqueueNDRangeKernel(
+                kernel_maximum_vit, cl::NullRange,
+                cl::NDRange(max_unit*max_size_of_groups), cl::NDRange(max_size_of_groups)));
+
+
+    check_cl_error(
+        queue_.enqueueReadBuffer(
+        reducResult,
+        CL_TRUE, 0,
+        sizeof(float) * max_unit,
+        redresult));
+    for(size_t i = 1; i < max_unit; ++i) {
+        if(redresult[i] > redresult[0]) redresult[0]= redresult[i];
+        //std::cout<<"max vit :"<<redresult[i]<<std::endl;
+    }
+
+    float maxVel2 = redresult[0];
+    float maxVel = sqrt(redresult[0]);
+
+    check_cl_error(kernel_maximum_accel.setArg(0, input_buffer));
+    check_cl_error(kernel_maximum_accel.setArg(1, max_size_of_groups * sizeof(float), NULL)); //Declare local memory in arguments
+    check_cl_error(kernel_maximum_accel.setArg(2, parameters.particles_count));
+    check_cl_error(kernel_maximum_accel.setArg(3, reducResult));
+
+    check_cl_error(
+            queue_.enqueueNDRangeKernel(
+                kernel_maximum_accel, cl::NullRange,
+                cl::NDRange(max_unit*max_size_of_groups), cl::NDRange(max_size_of_groups)));
+
+
+    check_cl_error(
+        queue_.enqueueReadBuffer(
+        reducResult,
+        CL_TRUE, 0,
+        sizeof(float) * max_unit,
+        redresult));
+
+    for(size_t i = 1; i < max_unit; ++i) {
+        if(redresult[i] > redresult[0]) redresult[0]= redresult[i];
+    }
+
+    float maxAccel = sqrt(redresult[0]);
+
+    std::cout<<"max vit2 :"<<maxVel2<<std::endl;
+    std::cout<<"max vit :"<<maxVel<<std::endl;
+    std::cout<<"max acc :"<<maxAccel<<std::endl;
+
+    //if(maxVel>15)
+    //std::cin.ignore();
+
+    // Compute timestep
+    //float speedOfSound = sqrt(parameters.K);
+    //float tf = sqrt(parameters.h / maxAccel);
+    //float tcv = parameters.h / (speedOfSound + 0.6*(speedOfSound + 2.0/_maxuij));
+    //float _dt = (tf < tcv) ? tf : tcv;
+    dt = (sqrt(2*maxAccel*parameters.h+maxVel2)-maxVel)/(2*maxAccel);
+    // Clamp time step
+    if (dt < 0.00001) dt = 0.00001;
+    if (dt > 1.0f/(parameters.target_fps)*parameters.simulation_scale) dt = 1.0f/(parameters.target_fps)*parameters.simulation_scale;
+
+    std::cout<<"com time :"<<dt<<std::endl;
+    return dt;
 }

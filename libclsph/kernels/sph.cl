@@ -23,16 +23,14 @@ void kernel fillUintArray(global uint* bob ,uint value,int length){
 
 typedef struct {
   cl_uint particles_count;
-  cl_float max_velocity;
   cl_float fluid_density;
   cl_float total_mass;
   cl_float particle_mass;
   cl_float dynamic_viscosity;
   cl_float simulation_time;
-  cl_float target_fps;
   cl_float h;
   cl_float simulation_scale;
-  cl_float time_delta;
+  cl_float target_fps;
   cl_float surface_tension_threshold;
   cl_float surface_tension;
   cl_float restitution;
@@ -606,7 +604,8 @@ void kernel forces(global const particle* input_data,
 
 void kernel advection_collision(global const particle* input_data,
                                 global particle* output_data,
-                                const simulation_parameters params,
+                                const float restitution,
+                                const float time_delta,
                                 const precomputed_kernel_values smoothing_terms,
                                 global const unsigned int* cell_table,
                                 global const float* face_normals,
@@ -616,20 +615,21 @@ void kernel advection_collision(global const particle* input_data,
   output_data[current_particle_index] = input_data[current_particle_index];
   particle output_particle = input_data[current_particle_index];
 
-  float time_to_go = params.time_delta * params.simulation_scale;
+  float time_to_go =time_delta;
   collision_response response;
   float3 current_position = input_data[current_particle_index].position;
   float3 current_velocity =
       input_data[current_particle_index].intermediate_velocity;
+  float3 acceleration = output_particle.acceleration;
 
   do {
     advection_result res =
-        advect(current_position, current_velocity, output_particle.acceleration,
-               params.max_velocity, time_to_go);
+        advect(current_position, current_velocity, acceleration,
+               5.0f, time_to_go);
 
     response =
         handle_collisions(res.old_position, res.new_position, res.next_velocity,
-                          params.restitution, time_to_go, face_normals,
+                          restitution, time_to_go, face_normals,
                           vertices, indices, face_count);
 
     current_position = response.position;
@@ -637,9 +637,9 @@ void kernel advection_collision(global const particle* input_data,
 
     time_to_go -= response.time_elapsed;
 
-    output_particle.acceleration.x = 0.f;
-    output_particle.acceleration.y = 0.f;
-    output_particle.acceleration.z = 0.f;
+    acceleration.x = 0.f;
+    acceleration.y = 0.f;
+    acceleration.z = 0.f;
 
   } while (response.collision_happened);
 

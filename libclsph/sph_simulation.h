@@ -9,7 +9,7 @@ class sph_simulation {
  public:
   sph_simulation() : parameters(), write_intermediate_frames(false) {}
 
-  void simulate(int frame_count = 0);
+  void simulate();
 
   simulation_parameters parameters;
   precomputed_kernel_values precomputed_terms;
@@ -28,7 +28,8 @@ class sph_simulation {
  private:
   void init_particles(particle* buffer, const simulation_parameters&);
   void sort_particles(particle*, cl::Buffer&, cl::Buffer&, unsigned int*);
-  void simulate_single_frame(particle*, particle*);
+  float simulate_single_frame(particle*, particle*,float);
+  float computeTimeStep(cl::Buffer&);
 
   cl::Context context_;
   cl::CommandQueue queue_;
@@ -40,9 +41,15 @@ class sph_simulation {
   cl::Kernel kernel_sort_count_;
   cl::Kernel kernel_sort_;
   cl::Kernel kernel_fill_uint_array_;
+  cl::Kernel kernel_maximum_vit;
+  cl::Kernel kernel_maximum_accel;
 
   cl::Buffer front_buffer_;
   cl::Buffer back_buffer_;
+
+  unsigned int max_unit;
+  unsigned int size_of_groups;
+  unsigned int max_size_of_groups;
 
   static const int kSortThreadCount = 128;
   static const int kBucketCount = 256;
