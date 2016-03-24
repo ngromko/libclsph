@@ -30,6 +30,7 @@ class sph_simulation {
   void sort_particles(particle*, cl::Buffer&, cl::Buffer&, unsigned int*);
   float simulate_single_frame(particle*, particle*,float);
   float computeTimeStep(cl::Buffer&);
+  void computeDistanceField();
 
   cl::Context context_;
   cl::CommandQueue queue_;
@@ -41,11 +42,14 @@ class sph_simulation {
   cl::Kernel kernel_sort_count_;
   cl::Kernel kernel_sort_;
   cl::Kernel kernel_fill_uint_array_;
+  cl::Kernel kernel_df_;
   cl::Kernel kernel_maximum_vit;
   cl::Kernel kernel_maximum_accel;
 
   cl::Buffer front_buffer_;
   cl::Buffer back_buffer_;
+  cl::Buffer df_buffer_;
+  cl::Buffer bb_buffer_;
 
   unsigned int max_unit;
   unsigned int size_of_groups;

@@ -331,8 +331,7 @@ check_cl_error(queue_.finish());
 
   set_kernel_args(kernel_advection_collision_, front_buffer_, back_buffer_,
                   parameters.restitution,dt, precomputed_terms, cell_table_buffer,
-                  face_normals_buffer, vertices_buffer, indices_buffer,
-                  current_scene.face_count);
+                  df_buffer_, bb_buffer_, current_scene.face_count);
 
   // Advect particles and resolve collisions with scene geometry.
   float cumputedTime = dt;
@@ -379,6 +378,7 @@ void sph_simulation::simulate() {
   kernel_sort_count_ = make_kernel(program, "sort_count");
   kernel_sort_ = make_kernel(program, "sort");
   kernel_fill_uint_array_ = make_kernel(program, "fillUintArray");
+  kernel_df_ = make_kernel(program, "computeDistanceField");
   kernel_maximum_vit = make_kernel(program, "maximum_vit");
   kernel_maximum_accel = make_kernel(program, "maximum_accel");
 
@@ -387,6 +387,17 @@ void sph_simulation::simulate() {
                  sizeof(particle) * parameters.particles_count);
   back_buffer_ = cl::Buffer(context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
                             sizeof(particle) * parameters.particles_count);
+
+  df_buffer_ = cl::Buffer(context_, CL_MEM_WRITE_ONLY |  CL_MEM_ALLOC_HOST_PTR,
+                          sizeof(float) * current_scene.totalGridpoints);
+
+  bb_buffer_ = cl::Buffer(context_,  CL_MEM_WRITE_ONLY |  CL_MEM_ALLOC_HOST_PTR,
+                          sizeof(BB) * current_scene.bbs.size());
+
+  check_cl_error(queue_.enqueueWriteBuffer(
+      bb_buffer_, CL_TRUE, 0,
+      sizeof(BB) * current_scene.bbs.size(), current_scene.bbs.data()));
+
   sort_count_buffer_ =
       cl::Buffer(context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
                  sizeof(unsigned int) * kSortThreadCount * kBucketCount);
@@ -416,6 +427,8 @@ void sph_simulation::simulate() {
   float timeperframe = 1.0f/parameters.target_fps;
   int currentFrame = 2;
   float dt = timeperframe*parameters.simulation_scale;
+
+  computeDistanceField();
 
   while(time<parameters.simulation_time)
   {
@@ -630,4 +643,33 @@ float sph_simulation::computeTimeStep( cl::Buffer& input_buffer)
 
     std::cout<<"com time :"<<dt<<std::endl;
     return dt;
+}
+
+void sph_simulation::computeDistanceField(){
+
+  cl::Buffer trans(context_,  CL_MEM_WRITE_ONLY |  CL_MEM_ALLOC_HOST_PTR ,  sizeof(float) * current_scene.transforms.size());
+  cl::Buffer rvert(context_,  CL_MEM_WRITE_ONLY |  CL_MEM_ALLOC_HOST_PTR ,  sizeof(float) * current_scene.rvertices.size());
+
+  check_cl_error(
+      queue_.enqueueWriteBuffer(
+          trans, CL_TRUE, 0,
+          sizeof(float) * current_scene.transforms.size(), current_scene.transforms.data()));
+
+  check_cl_error(
+      queue_.enqueueWriteBuffer(
+          rvert, CL_TRUE, 0,
+          sizeof(float) * current_scene.rvertices.size(), current_scene.rvertices.data()));
+
+  check_cl_error(kernel_df_.setArg(0,df_buffer_));
+  check_cl_error(kernel_df_.setArg(1,bb_buffer_));
+  check_cl_error(kernel_df_.setArg(2,trans));
+  check_cl_error(kernel_df_.setArg(3,rvert));
+  check_cl_error(kernel_df_.setArg(4,current_scene.face_count));
+  check_cl_error(kernel_df_.setArg(5,current_scene.totalGridpoints));
+
+  std::cout << "totalgpoints " << current_scene.totalGridpoints << std::endl;
+  check_cl_error(
+          queue_.enqueueNDRangeKernel(
+              kernel_df_, cl::NullRange,
+              cl::NDRange(current_scene.totalGridpoints), cl::NullRange));
 }

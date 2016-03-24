@@ -4,7 +4,7 @@ typedef struct {
 } advection_result;
 
 advection_result advect(float3 current_position, float3 intermediate_velocity,
-                        float3 acceleration, float max_velocity,
+                        float3 acceleration,
                         float time_elapsed) {
   advection_result res;
 
@@ -12,10 +12,6 @@ advection_result advect(float3 current_position, float3 intermediate_velocity,
 
   // Leapfrog
   res.next_velocity = intermediate_velocity + acceleration * time_elapsed;
-
-  if (length(res.next_velocity) > max_velocity) {
-    res.next_velocity = normalize(res.next_velocity) * max_velocity;
-  }
 
   res.new_position = current_position + res.next_velocity * time_elapsed;
 

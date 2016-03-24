@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
         std::endl <<
         "Saving to folder:          " << saver.frames_folder_prefix + "frames/" << std::endl;
 
-    if(!simulation.current_scene.load(argv[3])) {
+    if(!simulation.current_scene.load(argv[3],simulation.parameters.h*2)) {
         std::cerr << "Unable to load scene: " << argv[3] << std::endl;
         return -1;
     }

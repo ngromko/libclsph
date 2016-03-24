@@ -62,9 +62,10 @@ void kernel advection_collision(global const particle* input_data,
                                 const float time_delta,
                                 const precomputed_kernel_values smoothing_terms,
                                 global const unsigned int* cell_table,
-                                global const float* face_normals,
-                                global const float* vertices,
-                                global const uint* indices, uint face_count) {
+                                global const float* df,
+                                global const BB* bboxs,
+                                uint face_count
+                                ) {
   const size_t current_particle_index = get_global_id(0);
   output_data[current_particle_index] = input_data[current_particle_index];
   particle output_particle = input_data[current_particle_index];
@@ -76,15 +77,15 @@ void kernel advection_collision(global const particle* input_data,
       input_data[current_particle_index].intermediate_velocity;
   float3 acceleration = output_particle.acceleration;
 
-  do {
+  //do {
     advection_result res =
         advect(current_position, current_velocity, acceleration,
-               5.0f, time_to_go);
+               time_to_go);
 
     response =
-        handle_collisions(res.old_position, res.new_position, res.next_velocity,
-                          restitution, time_to_go, face_normals,
-                          vertices, indices, face_count);
+        handle_collisions(
+            res.old_position, res.new_position, res.next_velocity,
+            restitution, time_to_go, df,bboxs, face_count);
 
     current_position = response.position;
     current_velocity = response.next_velocity;
@@ -95,7 +96,7 @@ void kernel advection_collision(global const particle* input_data,
     acceleration.y = 0.f;
     acceleration.z = 0.f;
 
-  } while (response.collision_happened);
+  //} while (response.collision_happened);
 
   output_particle.velocity =
       (input_data[current_particle_index].intermediate_velocity +
