@@ -16,6 +16,7 @@ const std::string BUFFER_KERNEL_FILE_NAME = "kernels/sph.cl";
 cl::Device* running_device;
 
 cl::Kernel make_kernel(cl::Program& p, const char* name) {
+
   cl_int cl_error;
   cl::Kernel k = cl::Kernel(p, name, &cl_error);
   check_cl_error(cl_error);
@@ -96,23 +97,21 @@ void sph_simulation::init_particles(particle* buffer,
 /**
  * @brief Sorts the particles according to their grid index using Radix Sort
  *
- * @param[in,out] particles      The array that contains the actual particle
- *data
  * @param[in] first_buffer       The first OpenCL buffer used
  * @param[in] second_buffer      The second OpenCL buffer used
- * @param[out] cell_table        The array that contains the start indexes of
+ * @param[out] cell_table_buffer The OpenCl buffer that contains the start indexes of
  *the cell in the sorted array
  *
  */
-void sph_simulation::sort_particles(particle* particles,
-                                    cl::Buffer& first_buffer,
+void sph_simulation::sort_particles(cl::Buffer& first_buffer,
                                     cl::Buffer& second_buffer,
-                                    unsigned int* cell_table) {
+                                    cl::Buffer& cell_table_buffer) {
   cl::Buffer* current_input_buffer = &first_buffer;
   cl::Buffer* current_output_buffer = &second_buffer;
 
   for (int pass_number = 0; pass_number < 4; ++pass_number) {
 
+    set_kernel_args(kernel_fill_uint_array_,sort_count_buffer_,0,kSortThreadCount * kBucketCount);
     check_cl_error(queue_.enqueueNDRangeKernel(
         kernel_fill_uint_array_, cl::NullRange, cl::NDRange(kSortThreadCount * kBucketCount),
         cl::NullRange));
@@ -149,145 +148,54 @@ void sph_simulation::sort_particles(particle* particles,
     check_cl_error(queue_.enqueueNDRangeKernel(kernel_sort_, cl::NullRange,
                                                cl::NDRange(kSortThreadCount),
                                                cl::NullRange));
-check_cl_error(queue_.finish());
+
     cl::Buffer* tmp = current_input_buffer;
     current_input_buffer = current_output_buffer;
     current_output_buffer = tmp;
   }
 
-  check_cl_error(queue_.enqueueReadBuffer(
-      *current_input_buffer, CL_TRUE, 0,
-      sizeof(particle) * parameters.particles_count, particles));
+  set_kernel_args(kernel_fill_uint_array_,cell_table_buffer,parameters.particles_count,parameters.grid_cell_count);
+  check_cl_error(
+          queue_.enqueueNDRangeKernel(
+              kernel_fill_uint_array_, cl::NullRange,
+              cl::NDRange(parameters.grid_cell_count), cl::NullRange));
+
 
   // Build the cell table by computing the cumulative sum at every cell.
-  unsigned int current_index = 0;
-  for (unsigned int i = 0; i < parameters.grid_cell_count; ++i) {
-    cell_table[i] = current_index;
-    while (current_index != parameters.particles_count &&
-           particles[current_index].grid_index == i) {
-      current_index++;
-    }
-  }
+  set_kernel_args(kernel_cell_table,*current_input_buffer, cell_table_buffer, parameters.particles_count,parameters.grid_cell_count);
+      check_cl_error(
+          queue_.enqueueNDRangeKernel(
+              kernel_cell_table, cl::NullRange,
+              cl::NDRange(parameters.particles_count), cl::NullRange));
 }
 
-float sph_simulation::simulate_single_frame(particle* in_particles,
-                                           particle* out_particles,
+float sph_simulation::simulate_single_frame(cl::Buffer& front_buffer,
+                                           cl::Buffer& back_buffer,
                                            float dt) {
-  // Calculate the optimal size for workgroups
 
-  // Start groups size at their maximum, make them smaller if necessary
-  // Optimally parameters.particles_count should be devisible by
-  // CL_DEVICE_MAX_WORK_GROUP_SIZE
-  // Refer to CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE
-  unsigned int size_of_groups =
-      running_device->getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>();
-  while (parameters.particles_count % size_of_groups != 0) {
-    size_of_groups /= 2;
-  }
-
-  // Make sure that the workgroups are small enough and that the particle data
-  // will fit in local memory
-  assert(size_of_groups <=
-         running_device->getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>());
-  assert(size_of_groups * sizeof(particle) <=
-         running_device->getInfo<CL_DEVICE_LOCAL_MEM_SIZE>());
-
-  // Initial transfer to the GPU
-  check_cl_error(queue_.enqueueWriteBuffer(
-      front_buffer_, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
-      in_particles));
-
-  // Recalculate the boundaries of the grid since the particles probably moved
-  // since the last frame.
-  cl_float min_x, max_x, min_y, max_y, min_z, max_z;
-  cl_float grid_cell_side_length = (parameters.h * 2);
-
-  min_x = min_y = min_z = std::numeric_limits<cl_int>::max();
-  max_x = max_y = max_z = std::numeric_limits<cl_int>::min();
-
-  for (size_t i = 0; i < parameters.particles_count; ++i) {
-    cl_float3 pos = in_particles[i].position;
-
-    if (pos.s[0] < min_x) min_x = pos.s[0];
-    if (pos.s[1] < min_y) min_y = pos.s[1];
-    if (pos.s[2] < min_z) min_z = pos.s[2];
-
-    if (pos.s[0] > max_x) max_x = pos.s[0];
-    if (pos.s[1] > max_y) max_y = pos.s[1];
-    if (pos.s[2] > max_z) max_z = pos.s[2];
-  }
-
-  // Add or subtracts a cell length to all sides to create a padding layer
-  // This simplifies calculations further down the line
-  min_x -= grid_cell_side_length * 2;
-  min_y -= grid_cell_side_length * 2;
-  min_z -= grid_cell_side_length * 2;
-
-  max_x += grid_cell_side_length * 2;
-  max_y += grid_cell_side_length * 2;
-  max_z += grid_cell_side_length * 2;
-
-  parameters.min_point.s[0] = min_x;
-  parameters.min_point.s[1] = min_y;
-  parameters.min_point.s[2] = min_z;
-
-  parameters.max_point.s[0] = max_x;
-  parameters.max_point.s[1] = max_y;
-  parameters.max_point.s[2] = max_z;
-
-  parameters.grid_size_x =
-      static_cast<cl_uint>((max_x - min_x) / grid_cell_side_length);
-  parameters.grid_size_y =
-      static_cast<cl_uint>((max_y - min_y) / grid_cell_side_length);
-  parameters.grid_size_z =
-      static_cast<cl_uint>((max_z - min_z) / grid_cell_side_length);
-
-  // The Z-curve uses interleaving of bits in a uint to caculate the index.
-  // This means we have floor(32/dimension_count) bits to represent each
-  // dimension.
-  assert(parameters.grid_size_x < 1024);
-  assert(parameters.grid_size_y < 1024);
-  assert(parameters.grid_size_z < 1024);
-
-  parameters.grid_cell_count = get_grid_index_z_curve(
-      parameters.grid_size_x, parameters.grid_size_y, parameters.grid_size_z);
+  findMinMaxPosition(front_buffer);
 
   // Locate each particle in the grid and build the grid count table
-  unsigned int* cell_table = new unsigned int[parameters.grid_cell_count];
-
-  set_kernel_args(kernel_locate_in_grid_, front_buffer_, back_buffer_,
+  set_kernel_args(kernel_locate_in_grid_, front_buffer, back_buffer,
                   parameters);
-check_cl_error(queue_.finish());
+
   check_cl_error(queue_.enqueueNDRangeKernel(
       kernel_locate_in_grid_, cl::NullRange,
       cl::NDRange(parameters.particles_count), cl::NDRange(size_of_groups)));
-      check_cl_error(queue_.finish());
 
-  check_cl_error(queue_.enqueueReadBuffer(
-      back_buffer_, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
-      out_particles));
-      check_cl_error(queue_.finish());
-
-  sort_particles(out_particles, back_buffer_, front_buffer_, cell_table);
 
   cl::Buffer cell_table_buffer(
       context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
       sizeof(unsigned int) * parameters.grid_cell_count);
 
-  check_cl_error(queue_.enqueueWriteBuffer(
-      cell_table_buffer, CL_TRUE, 0,
-      sizeof(unsigned int) * parameters.grid_cell_count, cell_table));
-
-  check_cl_error(queue_.enqueueWriteBuffer(
-      front_buffer_, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
-      out_particles));
+  sort_particles(back_buffer, front_buffer, cell_table_buffer);
 
   // Compute the density and the pressure term at every particle.
-  check_cl_error(kernel_density_pressure_.setArg(0, front_buffer_));
+  check_cl_error(kernel_density_pressure_.setArg(0, back_buffer));
   /*check_cl_error(kernel_density_pressure_.setArg(
       1, size_of_groups * sizeof(particle),
       nullptr));  // Declare local memory in arguments*/
-  check_cl_error(kernel_density_pressure_.setArg(1, back_buffer_));
+  check_cl_error(kernel_density_pressure_.setArg(1, front_buffer));
   check_cl_error(kernel_density_pressure_.setArg(2, parameters));
   check_cl_error(kernel_density_pressure_.setArg(3, precomputed_terms));
   check_cl_error(kernel_density_pressure_.setArg(4, cell_table_buffer));
@@ -296,40 +204,15 @@ check_cl_error(queue_.finish());
       kernel_density_pressure_, cl::NullRange,
       cl::NDRange(parameters.particles_count), cl::NDRange(size_of_groups)));
 
-  cl::Buffer face_normals_buffer(
-      context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-      sizeof(float) * current_scene.face_normals.size());
-  cl::Buffer vertices_buffer(context_,
-                             CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-                             sizeof(float) * current_scene.vertices.size());
-  cl::Buffer indices_buffer(
-      context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-      sizeof(unsigned int) * current_scene.indices.size());
-
-  check_cl_error(queue_.enqueueWriteBuffer(
-      face_normals_buffer, CL_TRUE, 0,
-      sizeof(float) * current_scene.face_normals.size(),
-      current_scene.face_normals.data()));
-
-  check_cl_error(
-      queue_.enqueueWriteBuffer(vertices_buffer, CL_TRUE, 0,
-                                sizeof(float) * current_scene.vertices.size(),
-                                current_scene.vertices.data()));
-
-  check_cl_error(queue_.enqueueWriteBuffer(
-      indices_buffer, CL_TRUE, 0,
-      sizeof(unsigned int) * current_scene.indices.size(),
-      current_scene.indices.data()));
-
   // Compute the density-forces at every particle.
-  set_kernel_args(kernel_forces_, back_buffer_, front_buffer_, parameters,
+  set_kernel_args(kernel_forces_, front_buffer, back_buffer, parameters,
                   precomputed_terms, cell_table_buffer);
 
   check_cl_error(queue_.enqueueNDRangeKernel(
       kernel_forces_, cl::NullRange, cl::NDRange(parameters.particles_count),
       cl::NDRange(size_of_groups)));
 
-  set_kernel_args(kernel_advection_collision_, front_buffer_, back_buffer_,
+  set_kernel_args(kernel_advection_collision_, back_buffer, front_buffer,
                   parameters.restitution,dt, precomputed_terms, cell_table_buffer,
                   df_buffer_, bb_buffer_, current_scene.face_count);
 
@@ -342,14 +225,8 @@ check_cl_error(queue_.finish());
           kernel_advection_collision_, cl::NullRange,
           cl::NDRange(parameters.particles_count), cl::NDRange(size_of_groups)));
 
-      cumputedTime= computeTimeStep(back_buffer_);
+      cumputedTime= computeTimeStep(front_buffer);
   }while(dt-cumputedTime>0.00001);
-
-    check_cl_error(queue_.enqueueReadBuffer(
-        back_buffer_, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
-        out_particles));
-
-  delete[] cell_table;
 
   return cumputedTime;
 }
@@ -378,14 +255,17 @@ void sph_simulation::simulate() {
   kernel_sort_count_ = make_kernel(program, "sort_count");
   kernel_sort_ = make_kernel(program, "sort");
   kernel_fill_uint_array_ = make_kernel(program, "fillUintArray");
+  kernel_cell_table = make_kernel(program, "fill_cell_table");
   kernel_df_ = make_kernel(program, "computeDistanceField");
+  kernel_minimum_pos = make_kernel(program, "minimum_pos");
+  kernel_maximum_pos = make_kernel(program, "maximum_pos");
   kernel_maximum_vit = make_kernel(program, "maximum_vit");
   kernel_maximum_accel = make_kernel(program, "maximum_accel");
 
-  front_buffer_ =
+  cl::Buffer front_buffer_ =
       cl::Buffer(context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
                  sizeof(particle) * parameters.particles_count);
-  back_buffer_ = cl::Buffer(context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
+  cl::Buffer back_buffer_ = cl::Buffer(context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
                             sizeof(particle) * parameters.particles_count);
 
   df_buffer_ = cl::Buffer(context_, CL_MEM_WRITE_ONLY |  CL_MEM_ALLOC_HOST_PTR,
@@ -402,18 +282,27 @@ void sph_simulation::simulate() {
       cl::Buffer(context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
                  sizeof(unsigned int) * kSortThreadCount * kBucketCount);
 
-  check_cl_error(kernel_fill_uint_array_.setArg(0,sort_count_buffer_));
-  check_cl_error(kernel_fill_uint_array_.setArg(1,0));
-  check_cl_error(kernel_fill_uint_array_.setArg(2,kSortThreadCount * kBucketCount));
-
   particle* particles = new particle[parameters.particles_count];
   init_particles(particles, parameters);
+
+  //-----------------------------------------------------
+  // Initial transfer to the GPU
+  //-----------------------------------------------------
+  check_cl_error(
+      queue_.enqueueWriteBuffer(
+          front_buffer_, CL_TRUE, 0,
+          sizeof(particle) * parameters.particles_count, particles));
 
   //Get number of groups for reduction
   max_size_of_groups = size_of_groups = running_device->getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>();
   max_unit= running_device->getInfo<CL_DEVICE_MAX_COMPUTE_UNITS>();
 
-  //while(parameters.particles_count%size_of_groups!=0)
+    // Calculate the optimal size for workgroups
+
+  // Start groups size at their maximum, make them smaller if necessary
+  // Optimally parameters.particles_count should be devisible by
+  // CL_DEVICE_MAX_WORK_GROUP_SIZE
+  // Refer to CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE
   while((parameters.particles_count%size_of_groups!=0) || (size_of_groups*sizeof(particle) > running_device->getInfo<CL_DEVICE_LOCAL_MEM_SIZE>()))
   {
     size_of_groups /= 2;
@@ -440,8 +329,12 @@ void sph_simulation::simulate() {
 
     while(timeleft > 0.0) {
       if (pre_frame) pre_frame(particles, parameters, false);
-
-      dt=simulate_single_frame(particles, particles,dt);
+      /*if(currentFrame&1){
+        dt=simulate_single_frame(back_buffer_,front_buffer_,dt);
+      }
+      else{*/
+        dt=simulate_single_frame(front_buffer_,back_buffer_,dt);
+      //}
       timeleft-=dt;
       if(timeleft<dt){
           dt=timeleft;
@@ -450,8 +343,12 @@ void sph_simulation::simulate() {
       if (post_frame) post_frame(particles, parameters, false);
     }
     time+=timeperframe;
-    ++currentFrame;
 
+    check_cl_error(queue_.enqueueReadBuffer(
+        front_buffer_, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
+        particles));
+
+    ++currentFrame;
     if (post_frame) {
       post_frame(particles, parameters, true);
     }
@@ -624,10 +521,6 @@ float sph_simulation::computeTimeStep( cl::Buffer& input_buffer)
 
     float maxAccel = sqrt(redresult[0]);
 
-    std::cout<<"max vit2 :"<<maxVel2<<std::endl;
-    std::cout<<"max vit :"<<maxVel<<std::endl;
-    std::cout<<"max acc :"<<maxAccel<<std::endl;
-
     //if(maxVel>15)
     //std::cin.ignore();
 
@@ -641,7 +534,6 @@ float sph_simulation::computeTimeStep( cl::Buffer& input_buffer)
     if (dt < 0.00001) dt = 0.00001;
     if (dt > 1.0f/(parameters.target_fps)*parameters.simulation_scale) dt = 1.0f/(parameters.target_fps)*parameters.simulation_scale;
 
-    std::cout<<"com time :"<<dt<<std::endl;
     return dt;
 }
 
@@ -672,4 +564,101 @@ void sph_simulation::computeDistanceField(){
           queue_.enqueueNDRangeKernel(
               kernel_df_, cl::NullRange,
               cl::NDRange(current_scene.totalGridpoints), cl::NullRange));
+}
+
+void sph_simulation::findMinMaxPosition(cl::Buffer& input_buffer){
+
+    cl_float3 redresult[max_unit];
+    cl_float grid_cell_side_length = (parameters.h * 2);
+
+    cl::Buffer reducResult(
+        context_,
+        CL_MEM_READ_WRITE ,
+        sizeof(cl_float3) * max_unit);
+
+
+    //-----------------------------------------------------
+    // Find minimum postion
+    //-----------------------------------------------------
+    check_cl_error(kernel_minimum_pos.setArg(0, input_buffer));
+    check_cl_error(kernel_minimum_pos.setArg(1, max_size_of_groups * sizeof(cl_float3), NULL)); //Declare local memory in arguments
+    check_cl_error(kernel_minimum_pos.setArg(2, parameters.particles_count));
+    check_cl_error(kernel_minimum_pos.setArg(3, reducResult));
+
+    check_cl_error(
+            queue_.enqueueNDRangeKernel(
+                kernel_minimum_pos, cl::NullRange,
+                cl::NDRange(max_unit*max_size_of_groups), cl::NDRange(max_size_of_groups)));
+
+    check_cl_error(
+        queue_.enqueueReadBuffer(
+        reducResult,
+        CL_TRUE, 0,
+        sizeof(cl_float3) * max_unit,
+        redresult));
+
+    for(size_t i = 1; i < max_unit; ++i) {
+
+        if(redresult[i].s[0] < redresult[0].s[0]) redresult[0].s[0] = redresult[i].s[0];
+        if(redresult[i].s[1] < redresult[0].s[1]) redresult[0].s[1] = redresult[i].s[1];
+        if(redresult[i].s[2] < redresult[0].s[2]) redresult[0].s[2] = redresult[i].s[2];
+    }
+
+    // Subtracts a cell length to all sides to create a padding layer
+    // This simplifies calculations further down the line
+    parameters.min_point.s[0] = redresult[0].s[0] - 2*grid_cell_side_length;
+    parameters.min_point.s[1] = redresult[0].s[1] - 2*grid_cell_side_length;
+    parameters.min_point.s[2] = redresult[0].s[2] - 2*grid_cell_side_length;
+
+    check_cl_error(kernel_maximum_pos.setArg(0, input_buffer));
+    check_cl_error(kernel_maximum_pos.setArg(1, max_size_of_groups * sizeof(cl_float3), NULL)); //Declare local memory in arguments
+    check_cl_error(kernel_maximum_pos.setArg(2, parameters.particles_count));
+    check_cl_error(kernel_maximum_pos.setArg(3, reducResult));
+
+    check_cl_error(
+            queue_.enqueueNDRangeKernel(
+                kernel_maximum_pos, cl::NullRange,
+                cl::NDRange(max_unit*max_size_of_groups), cl::NDRange(max_size_of_groups)));
+
+    check_cl_error(
+        queue_.enqueueReadBuffer(
+        reducResult,
+        CL_TRUE, 0,
+        sizeof(cl_float3) * max_unit,
+        redresult));
+
+    for(size_t i = 1; i < max_unit; ++i) {
+        if(redresult[i].s[0] > redresult[0].s[0]) redresult[0].s[0] = redresult[i].s[0];
+        if(redresult[i].s[1] > redresult[0].s[1]) redresult[0].s[1] = redresult[i].s[1];
+        if(redresult[i].s[2] > redresult[0].s[2]) redresult[0].s[2] = redresult[i].s[2];
+    }
+
+    // Adds a cell length to all sides to create a padding layer
+    // This simplifies calculations further down the line
+    parameters.max_point.s[0] = redresult[0].s[0] + 2*grid_cell_side_length;
+    parameters.max_point.s[1] = redresult[0].s[1] + 2*grid_cell_side_length;
+    parameters.max_point.s[2] = redresult[0].s[2] + 2*grid_cell_side_length;
+
+    //-----------------------------------------------------
+    // Recalculate the boundaries of the grid since the particles probably moved
+    // since the last frame.
+    //-----------------------------------------------------
+
+    parameters.grid_size_x = static_cast<cl_uint>((parameters.max_point.s[0] - parameters.min_point.s[0]) / (grid_cell_side_length));
+    parameters.grid_size_y = static_cast<cl_uint>((parameters.max_point.s[1] - parameters.min_point.s[1]) / (grid_cell_side_length));
+    parameters.grid_size_z = static_cast<cl_uint>((parameters.max_point.s[2] - parameters.min_point.s[2]) / (grid_cell_side_length));
+
+
+    // The Z-curve uses interleaving of bits in a uint to caculate the index.
+    // This means we have floor(32/dimension_count) bits to represent each
+    // dimension.
+    assert(parameters.grid_size_x < 1024);
+    assert(parameters.grid_size_y < 1024);
+    assert(parameters.grid_size_z < 1024);
+
+    parameters.grid_cell_count = get_grid_index_z_curve(
+        parameters.grid_size_x,
+        parameters.grid_size_y,
+        parameters.grid_size_z
+    );
 }

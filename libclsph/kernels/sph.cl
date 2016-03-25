@@ -1,6 +1,6 @@
 #define KERNEL_INCLUDE
 
-void kernel fillUintArray(global uint* bob ,uint value,int length){
+void kernel fillUintArray(global uint* bob ,uint value,uint length){
     uint id = get_global_id(0);
     if(id<length)
         bob[id]=value;
@@ -609,6 +609,28 @@ void kernel sort(global const particle* in_particles,
 
     out_particles[insertion_index] = in_particles[i];
   }
+}
+
+void kernel fill_cell_table(
+	global const particle* particles,
+	global uint* cell_table,
+	uint particle_count,
+	uint cell_count) {
+
+    const size_t work_item_id = get_global_id(0);
+
+    uint current_index=particles[work_item_id].grid_index;
+
+    if(work_item_id<=particles[0].grid_index){
+        cell_table[work_item_id]=0;
+    }
+    if(work_item_id>0){
+        uint diff= current_index-  particles[work_item_id-1].grid_index;
+        for(uint i=0;i<diff;i++){
+            cell_table[current_index]=work_item_id;
+            current_index--;
+        }
+	}
 }
 
 typedef struct {
