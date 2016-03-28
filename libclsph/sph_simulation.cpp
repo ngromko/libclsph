@@ -238,6 +238,8 @@ void sph_simulation::simulate() {
 
   std::thread savet;
 
+  bool readParticle = true;
+
   std::vector<cl::Device> device_array;
   check_cl_error(init_cl_single_device(&context_, device_array, "", "", true));
 
@@ -329,14 +331,17 @@ void sph_simulation::simulate() {
   while(time<parameters.simulation_time)
   {
     std::cout << "Simulatingo frame " << currentFrame << " (" << time<< "s)" << std::endl;
-    if (pre_frame) {
-        std::cout << "pre..." << std::endl;
-      pre_frame(particles, parameters, true);
+
+    if (!write_intermediate_frames && pre_frame) {
+        readParticle = executePreFrameOpperation(particles,front_buffer_,readParticle);
     }
+
     float timeleft=timeperframe;
-     std::cout << "easgesag" << std::endl;
     while(timeleft > 0.0) {
-      if (pre_frame) pre_frame(particles, parameters, false);
+      if (write_intermediate_frames && pre_frame){
+         readParticle = executePreFrameOpperation(particles,front_buffer_,readParticle);
+      }
+      readParticle=true;
       dt=simulate_single_frame(front_buffer_,back_buffer_,dt);
       timeleft-=dt;
       if(timeleft<dt){
@@ -347,30 +352,30 @@ void sph_simulation::simulate() {
         check_cl_error(queue_.enqueueReadBuffer(
           front_buffer_, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
           particles));
-
+        readParticle = false;
         savet.join();
 
         savet = std::thread([=] { save_frame(particles,parameters); });
       }
-      if (post_frame) post_frame(particles, parameters, false);
+      if (write_intermediate_frames && post_frame){
+          readParticle = executePostFrameOpperation(particles,front_buffer_,readParticle);
+      }
     }
     time+=timeperframe;
 
     ++currentFrame;
 
-    if(save_frame){
+    if(!write_intermediate_frames && save_frame){
       check_cl_error(queue_.enqueueReadBuffer(
         front_buffer_, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
         particles));
-      std::cout << "waiting..." << std::endl;
+      readParticle = false;
       savet.join();
-      std::cout << "starting..." << std::endl;
       savet = std::thread([=] { save_frame(particles,parameters); });
     }
 
-    if (post_frame) {
-        std::cout << "post..." << std::endl;
-      post_frame(particles, parameters, true);
+    if (!write_intermediate_frames && post_frame) {
+      readParticle = executePostFrameOpperation(particles,front_buffer_,readParticle);
     }
   }
   delete[] particles;
@@ -681,4 +686,40 @@ void sph_simulation::findMinMaxPosition(cl::Buffer& input_buffer){
         parameters.grid_size_y,
         parameters.grid_size_z
     );
+}
+
+bool sph_simulation::executePreFrameOpperation(particle* particles, cl::Buffer& buffer, bool readParticle){
+
+    //Only read particle if not already done
+    if(readParticle){
+        check_cl_error(queue_.enqueueReadBuffer(
+          buffer, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
+          particles));
+        readParticle=false;
+    }
+    //Only write particle id needed
+  if(pre_frame(particles, parameters)){
+      check_cl_error(queue_.enqueueWriteBuffer(
+        buffer, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
+        particles));
+  }
+  return readParticle;
+}
+
+bool sph_simulation::executePostFrameOpperation(particle* particles, cl::Buffer& buffer, bool readParticle){
+
+    //Only read particle if not already done
+    if(readParticle){
+        check_cl_error(queue_.enqueueReadBuffer(
+          buffer, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
+          particles));
+        readParticle=false;
+    }
+    //Only write particle id needed
+  if(post_frame(particles, parameters)){
+      check_cl_error(queue_.enqueueWriteBuffer(
+        buffer, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
+        particles));
+  }
+  return readParticle;
 }
