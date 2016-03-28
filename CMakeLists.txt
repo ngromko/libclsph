@@ -10,7 +10,8 @@ endfunction()
 # User provided build options
 option(BUILD_EXAMPLES "Build examples" ON)
 
-set(PROJECT_BINARY_DIR "bin")
+#set(PROJECT_BINARY_DIR "bin")
+#file(MAKE_DIRECTORY ${PROJECT_BINARY_DIR})
 
 # Check if OpenCL is present on the system
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")

@@ -15,6 +15,7 @@ class sph_simulation {
   precomputed_kernel_values precomputed_terms;
 
   std::function<void(particle*, const simulation_parameters&, bool)> pre_frame;
+  std::function<void(particle*, const simulation_parameters&)> save_frame;
   std::function<void(particle*, const simulation_parameters&, bool)> post_frame;
 
   void load_settings(std::string fluid_file_name,

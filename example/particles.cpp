@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
         std::exit(-1);
     }
 
-    simulation.pre_frame = [&] (particle* particles, const simulation_parameters& params, bool full_frame) {
+    /*simulation.pre_frame = [&] (particle* particles, const simulation_parameters& params, bool full_frame) {
         if(simulation.write_intermediate_frames != full_frame) {
             saver.writeFrameToFile(particles, params);
         }
@@ -40,6 +40,17 @@ int main(int argc, char** argv) {
             cereal::BinaryOutputArchive archive(file_out);
             archive.saveBinary(particles,sizeof(particle)*params.particles_count);
         }
+    };*/
+
+    simulation.save_frame = [&] (particle* particles, const simulation_parameters& params){
+         std::cout << "saving..." << std::endl;
+        saver.writeFrameToFile(particles, params);
+
+         if(simulation.serialize){
+             std::ofstream file_out( "last_frame.bin" );
+             cereal::BinaryOutputArchive archive(file_out);
+             archive.saveBinary(particles,sizeof(particle)*params.particles_count);
+         }
     };
 
     std::cout << std::endl <<

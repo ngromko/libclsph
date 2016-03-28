@@ -1,5 +1,6 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
+#include <thread>
 
 #define EXIT_ON_CL_ERROR
 
@@ -235,6 +236,8 @@ void sph_simulation::simulate() {
 
   cl_int cl_error;
 
+  std::thread savet;
+
   std::vector<cl::Device> device_array;
   check_cl_error(init_cl_single_device(&context_, device_array, "", "", true));
 
@@ -319,37 +322,54 @@ void sph_simulation::simulate() {
 
   computeDistanceField();
 
+  if(save_frame){
+    savet = std::thread([=] { save_frame(particles,parameters); });
+  }
+
   while(time<parameters.simulation_time)
   {
-    std::cout << "Simulating frame " << currentFrame << " (" << time<< "s)" << std::endl;
+    std::cout << "Simulatingo frame " << currentFrame << " (" << time<< "s)" << std::endl;
     if (pre_frame) {
+        std::cout << "pre..." << std::endl;
       pre_frame(particles, parameters, true);
     }
     float timeleft=timeperframe;
-
+     std::cout << "easgesag" << std::endl;
     while(timeleft > 0.0) {
       if (pre_frame) pre_frame(particles, parameters, false);
-      /*if(currentFrame&1){
-        dt=simulate_single_frame(back_buffer_,front_buffer_,dt);
-      }
-      else{*/
-        dt=simulate_single_frame(front_buffer_,back_buffer_,dt);
-      //}
+      dt=simulate_single_frame(front_buffer_,back_buffer_,dt);
       timeleft-=dt;
       if(timeleft<dt){
           dt=timeleft;
       }
       std::cout<<"temps restant pour la frame :"<<timeleft<<std::endl;
+      if(save_frame && write_intermediate_frames){
+        check_cl_error(queue_.enqueueReadBuffer(
+          front_buffer_, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
+          particles));
+
+        savet.join();
+
+        savet = std::thread([=] { save_frame(particles,parameters); });
+      }
       if (post_frame) post_frame(particles, parameters, false);
     }
     time+=timeperframe;
 
-    check_cl_error(queue_.enqueueReadBuffer(
+    ++currentFrame;
+
+    if(save_frame){
+      check_cl_error(queue_.enqueueReadBuffer(
         front_buffer_, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
         particles));
+      std::cout << "waiting..." << std::endl;
+      savet.join();
+      std::cout << "starting..." << std::endl;
+      savet = std::thread([=] { save_frame(particles,parameters); });
+    }
 
-    ++currentFrame;
     if (post_frame) {
+        std::cout << "post..." << std::endl;
       post_frame(particles, parameters, true);
     }
   }
