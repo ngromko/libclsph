@@ -6,26 +6,23 @@ typedef struct {
 	int indice;
 } collision_response;
 
-int respond(collision_response* response, float3 p, float3 normal,float restitution,float d, float time_elapsed) {
-	//hack to avoid points directly on the faces, the collision detection code should be
+__device__ int respond(collision_response* response, float3 p, float3 normal,float restitution,float d, float time_elapsed) {
 	response->position = p + d*normal;
 
-	response->next_velocity -=
+        response->next_velocity = response->next_velocity -
 		(1.f +
 			restitution *
 			d /
 			(time_elapsed * length(response->next_velocity))) *
 		dot(response->next_velocity, normal) * normal;
-		//response->bob = normal;
-
 	return 1;
 }
 
-float det(float x1, float y1,float x2, float y2){
+__device__ float det(float x1, float y1,float x2, float y2){
     return x1*y2 - y1*x2;
 }
 
-float distPointDroite(float x, float y, float z, float x1, float y1, float x2, float y2){
+__device__ float distPointDroite(float x, float y, float z, float x1, float y1, float x2, float y2){
     float A = y - x1;
     float B = z - y1;
     float C = x2 - x1;
@@ -58,18 +55,18 @@ float distPointDroite(float x, float y, float z, float x1, float y1, float x2, f
 
 }
 
-void kernel computeDistanceField(
-    global float* df,
-    global const BB* bboxs,
-    global const float* transforms,
-    global const float* rvertices,
+__global__ void kernelComputeDistanceField(
+    float* df,
+    const BB* bboxs,
+    const float* transforms,
+    const float* rvertices,
     uint face_count,
     uint gridcount
     ) {
         int indice =face_count-1;
         int toffset =bboxs[indice].offset;
         float temd= 20;
-        const size_t current_df_index = get_global_id(0);
+        const unsigned int current_df_index = blockIdx.x*blockDim.x+threadIdx.x;
         while(toffset>current_df_index && indice>0){
             indice--;
             toffset = bboxs[indice].offset;
@@ -116,7 +113,7 @@ void kernel computeDistanceField(
                         }
                     }
                     if(d<fabs(temd)){
-                        temd=copysign(d,rpx);
+                        temd=copysignf(d,rpx);
                     }
 
                 }
@@ -126,31 +123,32 @@ void kernel computeDistanceField(
         }
     }
 
-float weigthedAverage(float x, float x1 , float x2,float d1, float d2){
+__device__ float weigthedAverage(float x, float x1 , float x2,float d1, float d2){
     return ((x2-x)/(x2-x1))*d1+((x-x1)/(x2-x1))*d2;
 }
 
-float bilinearInterpolation(float x, float y, float xmin , float ymin, float xmax, float ymax, float d00, float d01, float d10, float d11){
+__device__ float bilinearInterpolation(float x, float y, float xmin , float ymin, float xmax, float ymax, float d00, float d01, float d10, float d11){
     float R1 = weigthedAverage(x,xmin,xmax,d00,d10);
     float R2 = weigthedAverage(x,xmin,xmax,d01,d11);
     return weigthedAverage(y,ymin,ymax,R1,R2);
 }
 
-int getDFindex(BB bbox,float x, float y, float z, short a, short b, short c){
+__device__ int getDFindex(BB bbox,float x, float y, float z, short a, short b, short c){
     return bbox.offset + (y+b)*bbox.size_x*bbox.size_z+bbox.size_x*(z+c)+x+a;
 }
 
-collision_response handle_collisions(float3 old_position,
+__device__ collision_response handle_collisions(float3 old_position,
 	float3 position,
 	float3 next,
 	float restitution, float time_elapsed,
-	global const float* df,
-	global const BB* bboxs,
+	const float* df,
+	const BB* bboxs,
 	uint face_count) {
         int indice =-1;
         collision_response response = {
             position, next, 0, time_elapsed,-1
         };
+
         for(int i=0;i<face_count;i++){
             if(position.x<=bboxs[i].maxx && position.x>=bboxs[i].minx && position.y<=bboxs[i].maxy && position.y>=bboxs[i].miny && position.z<=bboxs[i].maxz && position.z>=bboxs[i].minz ){
                 indice = i;
@@ -190,7 +188,7 @@ collision_response handle_collisions(float3 old_position,
                     (facefront-faceback)
                 };
                 float lenn = length(normal);
-                normal/=lenn;
+                normal=normal/lenn;
 
                 respond(&response, position, normal, restitution,fabs(d), time_elapsed);
                 response.time_elapsed = time_elapsed *

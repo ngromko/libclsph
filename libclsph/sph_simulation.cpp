@@ -206,8 +206,14 @@ float sph_simulation::simulate_single_frame(cl::Buffer& front_buffer,
       cl::NDRange(parameters.particles_count), cl::NDRange(size_of_groups)));
 
   // Compute the density-forces at every particle.
-  set_kernel_args(kernel_forces_, front_buffer, back_buffer, parameters,
-                  precomputed_terms, cell_table_buffer);
+  check_cl_error(kernel_forces_.setArg(0, front_buffer));
+  check_cl_error(kernel_forces_.setArg(1, back_buffer));
+  check_cl_error(kernel_forces_.setArg(
+      2, size_of_groups * sizeof(particle),
+      nullptr));  // Declare local memory in arguments*/
+  check_cl_error(kernel_forces_.setArg(3, parameters));
+  check_cl_error(kernel_forces_.setArg(4, precomputed_terms));
+  check_cl_error(kernel_forces_.setArg(5, cell_table_buffer));
 
   check_cl_error(queue_.enqueueNDRangeKernel(
       kernel_forces_, cl::NullRange, cl::NDRange(parameters.particles_count),
@@ -216,7 +222,6 @@ float sph_simulation::simulate_single_frame(cl::Buffer& front_buffer,
   set_kernel_args(kernel_advection_collision_, back_buffer, front_buffer,
                   parameters.restitution,dt, precomputed_terms, cell_table_buffer,
                   df_buffer_, bb_buffer_, current_scene.face_count);
-
   // Advect particles and resolve collisions with scene geometry.
   float cumputedTime = dt;
   do{
@@ -330,7 +335,7 @@ void sph_simulation::simulate() {
 
   while(time<parameters.simulation_time)
   {
-    std::cout << "Simulatingo frame " << currentFrame << " (" << time<< "s)" << std::endl;
+    std::cout << "Simulating frame " << currentFrame << " (" << time<< "s)" << std::endl;
 
     if (!write_intermediate_frames && pre_frame) {
         readParticle = executePreFrameOpperation(particles,front_buffer_,readParticle);

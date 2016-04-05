@@ -1,180 +1,106 @@
+inline __device__ float operator*(float3 a, float3 b){
+  return a.x*b.x+a.y*b.y+a.z*b.z;
+}
+
+inline __device__ float dot(float3 a, float3 b){
+  return a.x*b.x+a.y*b.y+a.z*b.z;
+}
+
+inline __device__ float3 operator*(float3 a, float b){
+  return make_float3(a.x*b,a.y*b,a.z*b);
+}
+
+inline __device__ float3 operator*(float b, float3 a){
+  return make_float3(a.x*b,a.y*b,a.z*b);
+}
+
+inline __device__ float3 operator/(float3 a, float b){
+  return make_float3(a.x/b,a.y/b,a.z/b);
+}
+
+inline __device__ float3 operator+(float3 a, float3 b){
+  return make_float3(a.x+b.x,a.y+b.y,a.z+b.z);
+}
+
+inline __device__ float3 operator+(float3 a, float b){
+  return make_float3(a.x+b,a.y+b,a.z+b);
+}
+
+inline __device__ float3 operator+(float b, float3 a){
+  return make_float3(a.x+b,a.y+b,a.z+b);
+}
+
+inline __device__ float3 operator-(float3 a, float3 b){
+  return make_float3(a.x-b.x,a.y-b.y,a.z-b.z);
+}
+
+inline __device__ float3 operator-(float3 a, float b){
+  return make_float3(a.x-b,a.y-b,a.z-b);
+}
+
+/*inline __device__ float3 operator-(float b, float3 a){
+  return make_float3(a.x-b,a.y-b,a.z-b);
+}*/
+
+inline __device__ float length(float3 a){
+    return norm3df(a.x,a.y,a.z);
+}
+
+inline __device__ float distance(float3 a, float3 b){
+    return norm3df(a.x-b.x,a.y-b.y,a.z-b.z);
+}
+
+inline __device__ float clamp(float x, float a, float b)
+{
+  return fmaxf(a, fminf(b, x));
+}
 #define KERNEL_INCLUDE
 
-void kernel fillUintArray(global uint* bob ,uint value,uint length){
-    uint id = get_global_id(0);
+extern __shared__ int local_data[];
+
+__global__ void fillUintArray(uint* bob ,uint value,uint length){
+    uint id = blockIdx.x*blockDim.x+threadIdx.x;
     if(id<length)
         bob[id]=value;
 }
 
-#ifndef _STRUCTURES_H_
-#define _STRUCTURES_H_
 
-#ifdef KERNEL_INCLUDE
-#define cl_float float
-#define cl_uint unsigned int
-#define cl_int int
-#define cl_float3 float3
-#define cl_uint3 uint3
-#else
-#include "util/cl_boilerplate.h"
-#endif
-
-#define COLLISION_VOLUMES_COUNT 3
-
-typedef struct {
-  cl_uint particles_count;
-  cl_float fluid_density;
-  cl_float total_mass;
-  cl_float particle_mass;
-  cl_float dynamic_viscosity;
-  cl_float simulation_time;
-  cl_float h;
-  cl_float simulation_scale;
-  cl_float target_fps;
-  cl_float surface_tension_threshold;
-  cl_float surface_tension;
-  cl_float restitution;
-  cl_float K;
-
-  cl_float3 constant_acceleration;
-
-  cl_int grid_size_x;
-  cl_int grid_size_y;
-  cl_int grid_size_z;
-  cl_uint grid_cell_count;
-  cl_float3 min_point, max_point;
-} simulation_parameters;
-
-typedef struct {
-  cl_float3 position, velocity, intermediate_velocity, acceleration;
-  cl_float density, pressure;
-  cl_uint grid_index;
-} particle;
-
-typedef struct {
-  float poly_6;
-  float poly_6_gradient;
-  float poly_6_laplacian;
-  float spiky;
-  float viscosity;
-} precomputed_kernel_values;
-
-typedef struct {
-    float maxx;
-    float maxy;
-    float maxz;
-    float minx;
-    float miny;
-    float minz;
-    size_t size_x;
-    size_t size_y;
-    size_t size_z;
-    size_t offset;
-} BB;
-
-#endif
-#ifndef _UTIL_H_
-#define _UTIL_H_
-
-cl_uint uninterleave(cl_uint value) {
-  cl_uint ret = 0x0;
-
-  ret |= (value & 0x1) >> 0;
-  ret |= (value & 0x8) >> 2;
-  ret |= (value & 0x40) >> 4;
-  ret |= (value & 0x200) >> 6;
-  ret |= (value & 0x1000) >> 8;
-  ret |= (value & 0x8000) >> 10;
-  ret |= (value & 0x40000) >> 12;
-  ret |= (value & 0x200000) >> 14;
-  ret |= (value & 0x1000000) >> 16;
-  ret |= (value & 0x8000000) >> 18;
-
-  return ret;
-}
-
-cl_uint3 get_cell_coords_z_curve(cl_uint index) {
-  cl_uint mask = 0x9249249;
-  cl_uint i_x = index & mask;
-  cl_uint i_y = (index >> 1) & mask;
-  cl_uint i_z = (index >> 2) & mask;
-
-#ifdef KERNEL_INCLUDE
-  cl_uint3 coords = {uninterleave(i_x), uninterleave(i_y), uninterleave(i_z)};
-#else
-  cl_uint3 coords;
-
-  coords.s[0] = uninterleave(i_x);
-  coords.s[1] = uninterleave(i_y);
-  coords.s[2] = uninterleave(i_z);
-#endif
-
-  return coords;
-}
-
-// http://stackoverflow.com/questions/1024754/how-to-compute-a-3d-morton-number-interleave-the-bits-of-3-ints
-cl_uint get_grid_index_z_curve(cl_uint in_x, cl_uint in_y, cl_uint in_z) {
-  cl_uint x = in_x;
-  cl_uint y = in_y;
-  cl_uint z = in_z;
-
-  x = (x | (x << 16)) & 0x030000FF;
-  x = (x | (x << 8)) & 0x0300F00F;
-  x = (x | (x << 4)) & 0x030C30C3;
-  x = (x | (x << 2)) & 0x09249249;
-
-  y = (y | (y << 16)) & 0x030000FF;
-  y = (y | (y << 8)) & 0x0300F00F;
-  y = (y | (y << 4)) & 0x030C30C3;
-  y = (y | (y << 2)) & 0x09249249;
-
-  z = (z | (z << 16)) & 0x030000FF;
-  z = (z | (z << 8)) & 0x0300F00F;
-  z = (z | (z << 4)) & 0x030C30C3;
-  z = (z | (z << 2)) & 0x09249249;
-
-  return x | (y << 1) | (z << 2);
-}
-
-#endif
-inline float poly_6(float r, float h, precomputed_kernel_values terms) {
+#define CUDART_PI_F             3.141592654f
+__device__ float poly_6(float r, float h, precomputed_kernel_values terms) {
   return (1.f - clamp(floor(r / h), 0.f, 1.f)) * terms.poly_6 *
-         pown((pown(h, 2) - pown(r, 2)), 3);
+         powf((powf(h, 2) - powf(r, 2)), 3);
 }
 
-inline float3 poly_6_gradient(float3 r, float h,
+__device__ inline float3 poly_6_gradient(float3 r, float h,
                               precomputed_kernel_values terms) {
-  return (1.f - clamp(floor(convert_float(length(r)) / h), 0.f, 1.f)) *
-         terms.poly_6_gradient * r * pown((pown(h, 2) - pown(length(r), 2)), 2);
+  return (1.f - clamp(floor(length(r) / h), 0.f, 1.f)) *
+         terms.poly_6_gradient * r * powf((powf(h, 2) - powf(length(r), 2)), 2);
 }
 
-inline float poly_6_laplacian(float r, float h,
+__device__ inline float poly_6_laplacian(float r, float h,
                               precomputed_kernel_values terms) {
-  return (1.f - clamp(floor(convert_float(length(r)) / h), 0.f, 1.f)) *
-         terms.poly_6_laplacian * (pown(h, 2) - pown(r, 2)) *
-         (3.f * pown(h, 2) - 7.f * pown(r, 2));
+  return (1.f - clamp(floor(r / h), 0.f, 1.f)) *
+         terms.poly_6_laplacian * (powf(h, 2) - powf(r, 2)) *
+         (3.f * powf(h, 2) - 7.f * powf(r, 2));
 }
 
 #define EPSILON 0.0000001f
 
-inline float3 spiky_gradient(float3 r, float h,
+__device__ inline float3 spiky_gradient(float3 r, float h,
                              precomputed_kernel_values terms) {
   if (length(r) - EPSILON < 0.f && 0.f < length(r) + EPSILON) {
-    return (-45.f / convert_float((M_PI * pown(h, 6))));
+    float tmp = (-45.f / ((CUDART_PI_F * powf(h, 6))));
+    return make_float3(tmp,tmp,tmp);
   }
-  return (1.f - clamp(floor(convert_float(length(r)) / h), 0.f, 1.f)) *
-         terms.spiky * (r / convert_float(length(r))) *
-         pown(h - convert_float(length(r)), 2);
+  return (1.f - clamp(floor(length(r) / h), 0.f, 1.f)) *
+         terms.spiky * (r / length(r)) *
+         powf(h - length(r), 2);
 }
 
-inline float viscosity_laplacian(float r, float h,
+__device__ inline float viscosity_laplacian(float r, float h,
                                  precomputed_kernel_values terms) {
   return (1.f - clamp(floor(r / h), 0.f, 1.f)) * terms.viscosity * (h - r);
 }
-
-uint2 get_start_end_indices_for_cell(uint cell_index,
-                                     global const unsigned int* cell_table,
-                                     simulation_parameters params);
 
 /**
  * @brief      Locates the particle data for a certain grid cell in the cell
@@ -188,8 +114,8 @@ uint2 get_start_end_indices_for_cell(uint cell_index,
  *particles that can be found at cell_index.
  *
  */
-uint2 get_start_end_indices_for_cell(uint cell_index,
-                                     global const unsigned int* cell_table,
+__device__ uint2 get_start_end_indices_for_cell(uint cell_index,
+                                      const unsigned int* cell_table,
                                      simulation_parameters params) {
   uint2 indices = {
       cell_table[cell_index], (params.grid_cell_count > cell_index + 1)
@@ -209,10 +135,10 @@ uint2 get_start_end_indices_for_cell(uint cell_index,
  *information
  * @param[in]  params           Contains the simulation parameters
  */
-void kernel locate_in_grid(global const particle* particles,
-                           global particle* out_particles,
+__global__ void locate_in_grid( const particle* particles,
+                            particle* out_particles,
                            simulation_parameters params) {
-  const size_t current_particle_index = get_global_id(0);
+  const size_t current_particle_index = blockIdx.x*blockDim.x+threadIdx.x;
   out_particles[current_particle_index] = particles[current_particle_index];
 
   uint3 position_in_grid = {0, 0, 0};
@@ -237,22 +163,11 @@ void kernel locate_in_grid(global const particle* particles,
 
 
 
-float compute_density_with_grid(
-    size_t current_particle_index, global const particle* others,
+__device__ float compute_density_with_grid(
+    size_t current_particle_index,  const particle* others,
     const simulation_parameters params,
     const precomputed_kernel_values smoothing_terms,
-    global const unsigned int* grid_cell_particle_list);
-float3 compute_internal_forces_with_grid(
-    size_t current_particle_index, global const particle* others,
-    const simulation_parameters params,
-    const precomputed_kernel_values smoothing_terms,
-    global const unsigned int* grid_cell_particle_list);
-
-float compute_density_with_grid(
-    size_t current_particle_index, global const particle* others,
-    const simulation_parameters params,
-    const precomputed_kernel_values smoothing_terms,
-    global const unsigned int* grid_cell_particle_list) {
+     const unsigned int* grid_cell_particle_list) {
   float density = 0.f;
 
   uint3 cell_coords =
@@ -278,11 +193,11 @@ float compute_density_with_grid(
   return density;
 }
 
-float3 compute_internal_forces_with_grid(
-    size_t current_particle_index, global const particle* others,
+/*float3 compute_internal_forces_with_grid(
+    size_t current_particle_index,  const particle* others,
     const simulation_parameters params,
     const precomputed_kernel_values smoothing_terms,
-    global const unsigned int* grid_cell_particle_list) {
+    const unsigned int* grid_cell_particle_list) {
   float3 pressure_term = {0.f, 0.f, 0.f};
   float3 viscosity_term = {0.f, 0.f, 0.f};
   // compute the inward surface normal, it's the gradient of the color field
@@ -304,9 +219,9 @@ float3 compute_internal_forces_with_grid(
           if (i != current_particle_index) {
             //[kelager] (4.11)
             pressure_term +=
-                (others[i].pressure / pown(others[i].density, 2) +
+                (others[i].pressure / powf(others[i].density, 2) +
                  others[current_particle_index].pressure /
-                     pown(others[current_particle_index].density, 2)) *
+                     powf(others[current_particle_index].density, 2)) *
                 params.particle_mass *
                 spiky_gradient(others[current_particle_index].position -
                                    others[i].position,
@@ -345,7 +260,7 @@ float3 compute_internal_forces_with_grid(
   }
 
   return sum;
-}
+}*/
 
 typedef struct {
 	float3 position, next_velocity;
@@ -354,26 +269,23 @@ typedef struct {
 	int indice;
 } collision_response;
 
-int respond(collision_response* response, float3 p, float3 normal,float restitution,float d, float time_elapsed) {
-	//hack to avoid points directly on the faces, the collision detection code should be
+__device__ int respond(collision_response* response, float3 p, float3 normal,float restitution,float d, float time_elapsed) {
 	response->position = p + d*normal;
 
-	response->next_velocity -=
+        response->next_velocity = response->next_velocity -
 		(1.f +
 			restitution *
 			d /
 			(time_elapsed * length(response->next_velocity))) *
 		dot(response->next_velocity, normal) * normal;
-		//response->bob = normal;
-
 	return 1;
 }
 
-float det(float x1, float y1,float x2, float y2){
+__device__ float det(float x1, float y1,float x2, float y2){
     return x1*y2 - y1*x2;
 }
 
-float distPointDroite(float x, float y, float z, float x1, float y1, float x2, float y2){
+__device__ float distPointDroite(float x, float y, float z, float x1, float y1, float x2, float y2){
     float A = y - x1;
     float B = z - y1;
     float C = x2 - x1;
@@ -406,18 +318,18 @@ float distPointDroite(float x, float y, float z, float x1, float y1, float x2, f
 
 }
 
-void kernel computeDistanceField(
-    global float* df,
-    global const BB* bboxs,
-    global const float* transforms,
-    global const float* rvertices,
+__global__ void kernelComputeDistanceField(
+    float* df,
+    const BB* bboxs,
+    const float* transforms,
+    const float* rvertices,
     uint face_count,
     uint gridcount
     ) {
         int indice =face_count-1;
         int toffset =bboxs[indice].offset;
         float temd= 20;
-        const size_t current_df_index = get_global_id(0);
+        const unsigned int current_df_index = blockIdx.x*blockDim.x+threadIdx.x;
         while(toffset>current_df_index && indice>0){
             indice--;
             toffset = bboxs[indice].offset;
@@ -464,7 +376,7 @@ void kernel computeDistanceField(
                         }
                     }
                     if(d<fabs(temd)){
-                        temd=copysign(d,rpx);
+                        temd=copysignf(d,rpx);
                     }
 
                 }
@@ -474,31 +386,32 @@ void kernel computeDistanceField(
         }
     }
 
-float weigthedAverage(float x, float x1 , float x2,float d1, float d2){
+__device__ float weigthedAverage(float x, float x1 , float x2,float d1, float d2){
     return ((x2-x)/(x2-x1))*d1+((x-x1)/(x2-x1))*d2;
 }
 
-float bilinearInterpolation(float x, float y, float xmin , float ymin, float xmax, float ymax, float d00, float d01, float d10, float d11){
+__device__ float bilinearInterpolation(float x, float y, float xmin , float ymin, float xmax, float ymax, float d00, float d01, float d10, float d11){
     float R1 = weigthedAverage(x,xmin,xmax,d00,d10);
     float R2 = weigthedAverage(x,xmin,xmax,d01,d11);
     return weigthedAverage(y,ymin,ymax,R1,R2);
 }
 
-int getDFindex(BB bbox,float x, float y, float z, short a, short b, short c){
+__device__ int getDFindex(BB bbox,float x, float y, float z, short a, short b, short c){
     return bbox.offset + (y+b)*bbox.size_x*bbox.size_z+bbox.size_x*(z+c)+x+a;
 }
 
-collision_response handle_collisions(float3 old_position,
+__device__ collision_response handle_collisions(float3 old_position,
 	float3 position,
 	float3 next,
 	float restitution, float time_elapsed,
-	global const float* df,
-	global const BB* bboxs,
+	const float* df,
+	const BB* bboxs,
 	uint face_count) {
         int indice =-1;
         collision_response response = {
             position, next, 0, time_elapsed,-1
         };
+
         for(int i=0;i<face_count;i++){
             if(position.x<=bboxs[i].maxx && position.x>=bboxs[i].minx && position.y<=bboxs[i].maxy && position.y>=bboxs[i].miny && position.z<=bboxs[i].maxz && position.z>=bboxs[i].minz ){
                 indice = i;
@@ -538,7 +451,7 @@ collision_response handle_collisions(float3 old_position,
                     (facefront-faceback)
                 };
                 float lenn = length(normal);
-                normal/=lenn;
+                normal=normal/lenn;
 
                 respond(&response, position, normal, restitution,fabs(d), time_elapsed);
                 response.time_elapsed = time_elapsed *
@@ -550,15 +463,15 @@ collision_response handle_collisions(float3 old_position,
         return response;
     }
 
-constant const unsigned int mask = 0xFF;
+__constant__ const unsigned int mask = 0xFF;
 
-inline unsigned int get_count_offset(int index, unsigned int mask,
+__device__ inline unsigned int get_count_offset(int index, unsigned int mask,
                                      int pass_number, int radix_width) {
   return (index & (mask << (pass_number * radix_width))) >>
          (pass_number * radix_width);
 }
 
-inline uint2 get_start_and_end(size_t particle_count, int thread_count,
+__device__ inline uint2 get_start_and_end(size_t particle_count, int thread_count,
                                int work_item_id) {
   size_t particles_per_thread = particle_count / thread_count;
   size_t start_index = particles_per_thread * work_item_id;
@@ -568,15 +481,15 @@ inline uint2 get_start_and_end(size_t particle_count, int thread_count,
     end_index = particle_count - 1;
   }
 
-  return (uint2)(start_index, end_index);
+  return make_uint2(start_index, end_index);
 }
 
 /* size of counts = sizeof(size_t) * bucket_count * thread_count */
-void kernel sort_count(global const particle* particles,
-                       global volatile unsigned int* counts,
+__global__ void sort_count(const particle* particles,
+                       volatile unsigned int* counts,
                        simulation_parameters params, int thread_count,
                        int pass_number, int radix_width) {
-  size_t work_item_id = get_global_id(0);
+  size_t work_item_id = blockIdx.x*blockDim.x+threadIdx.x;
   uint2 indices =
       get_start_and_end(params.particles_count, thread_count, work_item_id);
 
@@ -590,11 +503,11 @@ void kernel sort_count(global const particle* particles,
   }
 }
 
-void kernel sort(global const particle* in_particles,
-                 global particle* out_particles, global uint* start_indices,
+__global__ void sort(const particle* in_particles,
+                 particle* out_particles, uint* start_indices,
                  simulation_parameters params, int thread_count,
                  int pass_number, int radix_width) {
-  const size_t work_item_id = get_global_id(0);
+  const size_t work_item_id = blockIdx.x*blockDim.x+threadIdx.x;
   uint2 indices =
       get_start_and_end(params.particles_count, thread_count, work_item_id);
 
@@ -610,13 +523,13 @@ void kernel sort(global const particle* in_particles,
   }
 }
 
-void kernel fill_cell_table(
-	global const particle* particles,
-	global uint* cell_table,
+__global__ void fill_cell_table(
+        const particle* particles,
+        uint* cell_table,
 	uint particle_count,
 	uint cell_count) {
 
-    const size_t work_item_id = get_global_id(0);
+    const size_t work_item_id = blockIdx.x*blockDim.x+threadIdx.x;
 
     uint current_index=particles[work_item_id].grid_index;
 
@@ -629,14 +542,14 @@ void kernel fill_cell_table(
             cell_table[current_index]=work_item_id;
             current_index--;
         }
-	}
+    }
 }
 
 typedef struct {
   float3 old_position, new_position, next_velocity;
 } advection_result;
 
-advection_result advect(float3 current_position, float3 intermediate_velocity,
+__device__ advection_result advect(float3 current_position, float3 intermediate_velocity,
                         float3 acceleration,
                         float time_elapsed) {
   advection_result res;
@@ -652,27 +565,14 @@ advection_result advect(float3 current_position, float3 intermediate_velocity,
 }
 
 
-void kernel density_pressure(global const particle* input_data,
-                             //__local particle* local_data,
-                             global particle* output_data,
+__global__ void density_pressure(const particle* input_data,
+                              particle* output_data,
                              const simulation_parameters params,
                              const precomputed_kernel_values smoothing_terms,
-                             global const unsigned int* cell_table) {
+                              const unsigned int* cell_table) {
   /* we'll get the same amount of global_ids as there are particles */
-  const size_t current_particle_index = get_global_id(0);
-  const size_t group_index = get_group_id(0);
-  const size_t index_in_group = get_local_id(0);
-  const size_t group_size = get_local_size(0);
+  const size_t current_particle_index = blockIdx.x*blockDim.x+threadIdx.x;
 
-  /* First let's copy the data we'll use to local memory
-  event_t e = async_work_group_copy(
-      (__local char*)local_data,
-      (__global const char*)input_data +
-          (group_index * group_size * (sizeof(particle) / sizeof(char))),
-      group_size * (sizeof(particle) / sizeof(char)), 0);
-  wait_group_events(1, &e);
-
-  particle current_particle = local_data[index_in_group];*/
   particle current_particle = input_data[current_particle_index];
 
   current_particle.density = compute_density_with_grid(
@@ -683,32 +583,25 @@ void kernel density_pressure(global const particle* input_data,
   // Tait equation more suitable to liquids than state equation
   output_data[current_particle_index].pressure =
       params.K *
-      (pown(current_particle.density / params.fluid_density, 7) - 1.f);
+      (powf(current_particle.density / params.fluid_density, 7) - 1.f);
 }
 
-void kernel forces(global const particle* input_data,
-                   global particle* output_data,
-                   local particle* local_data,
+__global__ void forces(const particle* input_data,
+                    particle* output_data,
                    const simulation_parameters params,
                    const precomputed_kernel_values smoothing_terms,
-                   global const unsigned int* cell_table) {
-  const size_t current_particle_index = get_global_id(0);
-  const size_t local_index = get_local_id(0);
-  const size_t group_index = get_group_id(0);
-  const size_t group_size = get_local_size(0);
+                  const unsigned int* cell_table) {
+  const size_t current_particle_index = blockIdx.x*blockDim.x+threadIdx.x;
+  const size_t local_index = threadIdx.x;
+  const size_t group_index = blockIdx.x;
+  const size_t group_size = blockDim.x;
 
-  local_data[local_index] = input_data[current_particle_index];
-  barrier(CLK_LOCAL_MEM_FENCE);
-  output_data[current_particle_index] = local_data[local_index];
-  //particle output_particle;
+  particle* mlocal_Data = (particle*) local_data;
+  mlocal_Data[local_index] = input_data[current_particle_index];
+
+  output_data[current_particle_index] = mlocal_Data[local_index];
+
   particle other;
-
-  //output_data[current_particle_index] = input_data[current_particle_index];
-
-  //output_particle.acceleration =
-      //compute_internal_forces_with_grid(current_particle_index, input_data,
-      //                                  params, smoothing_terms, cell_table) /
-      //input_data[current_particle_index].density;
 
   float3 pressure_term = {0.f, 0.f, 0.f};
   float3 viscosity_term = {0.f, 0.f, 0.f};
@@ -718,7 +611,7 @@ void kernel forces(global const particle* input_data,
   float color_field_laplacian = 0.f;
 
   uint3 cell_coords =
-      get_cell_coords_z_curve(local_data[local_index].grid_index);
+      get_cell_coords_z_curve(mlocal_Data[local_index].grid_index);
 
   for (uint z = cell_coords.z - 1; z <= cell_coords.z + 1; ++z) {
     for (uint y = cell_coords.y - 1; y <= cell_coords.y + 1; ++y) {
@@ -728,74 +621,70 @@ void kernel forces(global const particle* input_data,
             grid_index, cell_table, params);
 
         for (size_t i = indices.x; i < indices.y; ++i) {
-            if(group_size*group_index <=i && i < group_size*group_index+group_size){
-                other=local_data[i-group_size*group_index];
-            }else{
-                other=input_data[i];
-            }
+            other=input_data[i];
           if (i != current_particle_index) {
             //[kelager] (4.11)
-            pressure_term +=
-                (other.pressure / pown(other.density, 2) +
-                 local_data[local_index].pressure /
-                     pown(local_data[local_index].density, 2)) *
+            pressure_term = pressure_term +
+                ((other.pressure / powf(other.density, 2) +
+                 mlocal_Data[local_index].pressure /
+                     powf(mlocal_Data[local_index].density, 2)) *
                 params.particle_mass *
-                spiky_gradient(local_data[local_index].position -
+                spiky_gradient(mlocal_Data[local_index].position -
                                    other.position,
-                               params.h, smoothing_terms);
+                               params.h, smoothing_terms));
 
-            viscosity_term +=
-                (other.velocity - local_data[local_index].velocity) *
+            viscosity_term = viscosity_term+
+                ((other.velocity - mlocal_Data[local_index].velocity) *
                 (params.particle_mass / other.density) *
                 viscosity_laplacian(
-                    length(local_data[local_index].position -
+                    length(mlocal_Data[local_index].position -
                            other.position),
-                    params.h, smoothing_terms);
+                    params.h, smoothing_terms));
           }
 
-          normal += params.particle_mass / other.density *
-                    poly_6_gradient(local_data[local_index].position -
+          normal = normal+ (params.particle_mass / other.density *
+                    poly_6_gradient(mlocal_Data[local_index].position -
                                         other.position,
-                                    params.h, smoothing_terms);
+                                    params.h, smoothing_terms));
 
-          color_field_laplacian +=
-              params.particle_mass / other.density *
-              poly_6_laplacian(length(local_data[local_index].position -
+          color_field_laplacian = color_field_laplacian +
+              (params.particle_mass / other.density *
+              poly_6_laplacian(length(mlocal_Data[local_index].position -
                                       other.position),
-                               params.h, smoothing_terms);
+                               params.h, smoothing_terms));
         }
       }
     }
   }
 
-  float3 sum = (-local_data[local_index].density * pressure_term) +
+  float3 sum = (-mlocal_Data[local_index].density * pressure_term) +
                (viscosity_term * params.dynamic_viscosity);
 
   if (length(normal) > params.surface_tension_threshold) {
-    sum += -params.surface_tension * color_field_laplacian * normal /
-           length(normal);
+    sum = sum + (-params.surface_tension * color_field_laplacian * normal /
+           length(normal));
   }
 
   output_data[current_particle_index].acceleration =
-      sum /local_data[local_index].density;
+      sum /mlocal_Data[local_index].density;
 
-  output_data[current_particle_index].acceleration += params.constant_acceleration;
+  output_data[current_particle_index].acceleration = output_data[current_particle_index].acceleration + params.constant_acceleration;
 
   // Copy back the information into the ouput buffer
   //output_data[current_particle_index] = output_particle;
 }
 
-void kernel advection_collision(global const particle* input_data,
-                                global particle* output_data,
+__global__ void advection_collision( const particle* input_data,
+                                 particle* output_data,
                                 const float restitution,
                                 const float time_delta,
                                 const precomputed_kernel_values smoothing_terms,
-                                global const unsigned int* cell_table,
-                                global const float* df,
-                                global const BB* bboxs,
+                                 const unsigned int* cell_table,
+                                 const float* df,
+                                 const BB* bboxs,
                                 uint face_count
                                 ) {
-  const size_t current_particle_index = get_global_id(0);
+  const size_t current_particle_index = blockIdx.x*blockDim.x+threadIdx.x;
   output_data[current_particle_index] = input_data[current_particle_index];
   particle output_particle = input_data[current_particle_index];
 
@@ -839,149 +728,146 @@ void kernel advection_collision(global const particle* input_data,
 }
 
 
-__kernel
-void minimum_pos(__global particle* buffer,
-    __local float3* scratch,
+__global__ void minimum_pos(particle* buffer,
     __const int length,
-    __global float3* result) {
+    float3* result) {
 
-    int global_index = get_global_id(0);
+    float3* scratch = (float3*) local_data;
+    int global_index = blockIdx.x*blockDim.x+threadIdx.x;
     float3 accumulator = {INFINITY,INFINITY,INFINITY};
     // Loop sequentially over chunks of input vector
     while (global_index < length) {
         float3 element = buffer[global_index].position;
-        accumulator.x = min(accumulator.x,element.x);
-        accumulator.y = min(accumulator.y,element.y);
-        accumulator.z = min(accumulator.z,element.z);
-        global_index += get_global_size(0);
+        accumulator.x = fminf(accumulator.x,element.x);
+        accumulator.y = fminf(accumulator.y,element.y);
+        accumulator.z = fminf(accumulator.z,element.z);
+        global_index += gridDim.x*blockDim.x;
     }
 
   // Perform parallel reduction
-    int local_index = get_local_id(0);
+    int local_index = threadIdx.x;
     scratch[local_index] = accumulator;
-    barrier(CLK_LOCAL_MEM_FENCE);
-    for(int offset = get_local_size(0) / 2;
+    __syncthreads();
+    for(int offset = blockDim.x / 2;
         offset > 0;
         offset = offset / 2) {
         if (local_index < offset) {
             float3 other = scratch[local_index + offset];
             float3 mine = scratch[local_index];
-            scratch[local_index].x = min(mine.x,other.x);
-            scratch[local_index].y = min(mine.y,other.y);
-            scratch[local_index].z = min(mine.z,other.z);
+            scratch[local_index].x = fminf(mine.x,other.x);
+            scratch[local_index].y = fminf(mine.y,other.y);
+            scratch[local_index].z = fminf(mine.z,other.z);
         }
-        barrier(CLK_LOCAL_MEM_FENCE);
+        __syncthreads();
     }
     if (local_index == 0) {
-        result[get_group_id(0)] = scratch[0];
+        result[blockIdx.x] = scratch[0];
     }
 }
 
 
-void kernel maximum_pos(global particle* buffer,
-    local float3* scratch,
+__global__ void maximum_pos(particle* buffer,
     const int length,
-    global float3* result) {
+    float3* result) {
 
-    int global_index = get_global_id(0);
+    float3* scratch = (float3*) local_data;
+    int global_index = blockIdx.x*blockDim.x+threadIdx.x;
     float3 accumulator = {-INFINITY,-INFINITY,-INFINITY};
     // Loop sequentially over chunks of input vector
     while (global_index < length) {
         float3 element = buffer[global_index].position;
-        accumulator.x = max(accumulator.x,element.x);
-        accumulator.y = max(accumulator.y,element.y);
-        accumulator.z = max(accumulator.z,element.z);
-        global_index += get_global_size(0);
+        accumulator.x = fmaxf(accumulator.x,element.x);
+        accumulator.y = fmaxf(accumulator.y,element.y);
+        accumulator.z = fmaxf(accumulator.z,element.z);
+        global_index += gridDim.x*blockDim.x;
     }
 
   // Perform parallel reduction
-    int local_index = get_local_id(0);
+    int local_index = threadIdx.x;
     scratch[local_index] = accumulator;
-    barrier(CLK_LOCAL_MEM_FENCE);
-    for(int offset = get_local_size(0) / 2;
+    __syncthreads();
+    for(int offset = blockDim.x / 2;
         offset > 0;
         offset = offset / 2) {
         if (local_index < offset) {
             float3 other = scratch[local_index + offset];
             float3 mine = scratch[local_index];
-            scratch[local_index].x = max(mine.x,other.x);
-            scratch[local_index].y = max(mine.y,other.y);
-            scratch[local_index].z = max(mine.z,other.z);
+            scratch[local_index].x = fmaxf(mine.x,other.x);
+            scratch[local_index].y = fmaxf(mine.y,other.y);
+            scratch[local_index].z = fmaxf(mine.z,other.z);
         }
-        barrier(CLK_LOCAL_MEM_FENCE);
+        __syncthreads();
     }
     if (local_index == 0) {
-        result[get_group_id(0)] = scratch[0];
+        result[blockIdx.x] = scratch[0];
     }
 }
 
-__kernel
-void maximum_vit(__global particle* buffer,
-    __local float* scratch,
-    __const int length,
-    __global float* result) {
+__global__  void maximum_vit( particle* buffer,
+    int length,
+    float* result) {
 
-    int global_index = get_global_id(0);
+    float* scratch = (float*) local_data;
+    int global_index = blockIdx.x*blockDim.x+threadIdx.x;
     float accumulator = -INFINITY;
     // Loop sequentially over chunks of input vector
     while (global_index < length) {
         float3 element = buffer[global_index].velocity;
         float vit = element.x*element.x + element.y*element.y + element.z*element.z;
-        accumulator = max(accumulator,vit);
-        global_index += get_global_size(0);
+        accumulator = fmaxf(accumulator,vit);
+        global_index += gridDim.x*blockDim.x;
     }
 
     // Perform parallel reduction
-    int local_index = get_local_id(0);
+    int local_index = threadIdx.x;
     scratch[local_index] = accumulator;
-    barrier(CLK_LOCAL_MEM_FENCE);
-    for(int offset = get_local_size(0) / 2;
+    __syncthreads();
+    for(int offset = blockDim.x / 2;
         offset > 0;
         offset = offset / 2) {
         if (local_index < offset) {
             float other = scratch[local_index + offset];
             float mine = scratch[local_index];
-            scratch[local_index] = max(mine,other);
+            scratch[local_index] = fmaxf(mine,other);
         }
-        barrier(CLK_LOCAL_MEM_FENCE);
+        __syncthreads();
     }
     if (local_index == 0) {
-        result[get_group_id(0)] = scratch[0];
+        result[blockIdx.x] = scratch[0];
     }
 }
 
-__kernel
-void maximum_accel(__global particle* buffer,
-    __local float* scratch,
-    __const int length,
-    __global float* result) {
+__global__ void maximum_accel(particle* buffer,
+    int length,
+    float* result) {
 
-    int global_index = get_global_id(0);
+    float* scratch = (float*) local_data;
+    int global_index = blockIdx.x*blockDim.x+threadIdx.x;
     float accumulator = -INFINITY;
     // Loop sequentially over chunks of input vector
     while (global_index < length) {
         float3 element = buffer[global_index].acceleration;
         float vit = element.x*element.x + element.y*element.y + element.z*element.z;
-        accumulator = max(accumulator,vit);
-        global_index += get_global_size(0);
+        accumulator = fmaxf(accumulator,vit);
+        global_index += gridDim.x*blockDim.x;
     }
 
     // Perform parallel reduction
-    int local_index = get_local_id(0);
+    int local_index = threadIdx.x;
     scratch[local_index] = accumulator;
-    barrier(CLK_LOCAL_MEM_FENCE);
-    for(int offset = get_local_size(0) / 2;
+    __syncthreads();
+    for(int offset = blockDim.x / 2;
         offset > 0;
         offset = offset / 2) {
         if (local_index < offset) {
             float other = scratch[local_index + offset];
             float mine = scratch[local_index];
-            scratch[local_index] = max(mine,other);
+            scratch[local_index] = fmaxf(mine,other);
         }
-        barrier(CLK_LOCAL_MEM_FENCE);
+        __syncthreads();
     }
     if (local_index == 0) {
-        result[get_group_id(0)] = scratch[0];
+        result[blockIdx.x] = scratch[0];
     }
 }
 

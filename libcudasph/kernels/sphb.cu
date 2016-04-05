@@ -1,26 +1,13 @@
 
 
-void kernel density_pressure(global const particle* input_data,
-                             //__local particle* local_data,
-                             global particle* output_data,
+__global__ void density_pressure(const particle* input_data,
+                              particle* output_data,
                              const simulation_parameters params,
                              const precomputed_kernel_values smoothing_terms,
-                             global const unsigned int* cell_table) {
+                              const unsigned int* cell_table) {
   /* we'll get the same amount of global_ids as there are particles */
-  const size_t current_particle_index = get_global_id(0);
-  const size_t group_index = get_group_id(0);
-  const size_t index_in_group = get_local_id(0);
-  const size_t group_size = get_local_size(0);
+  const size_t current_particle_index = blockIdx.x*blockDim.x+threadIdx.x;
 
-  /* First let's copy the data we'll use to local memory
-  event_t e = async_work_group_copy(
-      (__local char*)local_data,
-      (__global const char*)input_data +
-          (group_index * group_size * (sizeof(particle) / sizeof(char))),
-      group_size * (sizeof(particle) / sizeof(char)), 0);
-  wait_group_events(1, &e);
-
-  particle current_particle = local_data[index_in_group];*/
   particle current_particle = input_data[current_particle_index];
 
   current_particle.density = compute_density_with_grid(
@@ -31,32 +18,25 @@ void kernel density_pressure(global const particle* input_data,
   // Tait equation more suitable to liquids than state equation
   output_data[current_particle_index].pressure =
       params.K *
-      (pown(current_particle.density / params.fluid_density, 7) - 1.f);
+      (powf(current_particle.density / params.fluid_density, 7) - 1.f);
 }
 
-void kernel forces(global const particle* input_data,
-                   global particle* output_data,
-                   local particle* local_data,
+__global__ void forces(const particle* input_data,
+                    particle* output_data,
                    const simulation_parameters params,
                    const precomputed_kernel_values smoothing_terms,
-                   global const unsigned int* cell_table) {
-  const size_t current_particle_index = get_global_id(0);
-  const size_t local_index = get_local_id(0);
-  const size_t group_index = get_group_id(0);
-  const size_t group_size = get_local_size(0);
+                  const unsigned int* cell_table) {
+  const size_t current_particle_index = blockIdx.x*blockDim.x+threadIdx.x;
+  const size_t local_index = threadIdx.x;
+  const size_t group_index = blockIdx.x;
+  const size_t group_size = blockDim.x;
 
-  local_data[local_index] = input_data[current_particle_index];
-  barrier(CLK_LOCAL_MEM_FENCE);
-  output_data[current_particle_index] = local_data[local_index];
-  //particle output_particle;
+  particle* mlocal_Data = (particle*) local_data;
+  mlocal_Data[local_index] = input_data[current_particle_index];
+
+  output_data[current_particle_index] = mlocal_Data[local_index];
+
   particle other;
-
-  //output_data[current_particle_index] = input_data[current_particle_index];
-
-  //output_particle.acceleration =
-      //compute_internal_forces_with_grid(current_particle_index, input_data,
-      //                                  params, smoothing_terms, cell_table) /
-      //input_data[current_particle_index].density;
 
   float3 pressure_term = {0.f, 0.f, 0.f};
   float3 viscosity_term = {0.f, 0.f, 0.f};
@@ -66,7 +46,7 @@ void kernel forces(global const particle* input_data,
   float color_field_laplacian = 0.f;
 
   uint3 cell_coords =
-      get_cell_coords_z_curve(local_data[local_index].grid_index);
+      get_cell_coords_z_curve(mlocal_Data[local_index].grid_index);
 
   for (uint z = cell_coords.z - 1; z <= cell_coords.z + 1; ++z) {
     for (uint y = cell_coords.y - 1; y <= cell_coords.y + 1; ++y) {
@@ -76,74 +56,70 @@ void kernel forces(global const particle* input_data,
             grid_index, cell_table, params);
 
         for (size_t i = indices.x; i < indices.y; ++i) {
-            if(group_size*group_index <=i && i < group_size*group_index+group_size){
-                other=local_data[i-group_size*group_index];
-            }else{
-                other=input_data[i];
-            }
+            other=input_data[i];
           if (i != current_particle_index) {
             //[kelager] (4.11)
-            pressure_term +=
-                (other.pressure / pown(other.density, 2) +
-                 local_data[local_index].pressure /
-                     pown(local_data[local_index].density, 2)) *
+            pressure_term = pressure_term +
+                ((other.pressure / powf(other.density, 2) +
+                 mlocal_Data[local_index].pressure /
+                     powf(mlocal_Data[local_index].density, 2)) *
                 params.particle_mass *
-                spiky_gradient(local_data[local_index].position -
+                spiky_gradient(mlocal_Data[local_index].position -
                                    other.position,
-                               params.h, smoothing_terms);
+                               params.h, smoothing_terms));
 
-            viscosity_term +=
-                (other.velocity - local_data[local_index].velocity) *
+            viscosity_term = viscosity_term+
+                ((other.velocity - mlocal_Data[local_index].velocity) *
                 (params.particle_mass / other.density) *
                 viscosity_laplacian(
-                    length(local_data[local_index].position -
+                    length(mlocal_Data[local_index].position -
                            other.position),
-                    params.h, smoothing_terms);
+                    params.h, smoothing_terms));
           }
 
-          normal += params.particle_mass / other.density *
-                    poly_6_gradient(local_data[local_index].position -
+          normal = normal+ (params.particle_mass / other.density *
+                    poly_6_gradient(mlocal_Data[local_index].position -
                                         other.position,
-                                    params.h, smoothing_terms);
+                                    params.h, smoothing_terms));
 
-          color_field_laplacian +=
-              params.particle_mass / other.density *
-              poly_6_laplacian(length(local_data[local_index].position -
+          color_field_laplacian = color_field_laplacian +
+              (params.particle_mass / other.density *
+              poly_6_laplacian(length(mlocal_Data[local_index].position -
                                       other.position),
-                               params.h, smoothing_terms);
+                               params.h, smoothing_terms));
         }
       }
     }
   }
 
-  float3 sum = (-local_data[local_index].density * pressure_term) +
+  float3 sum = (-mlocal_Data[local_index].density * pressure_term) +
                (viscosity_term * params.dynamic_viscosity);
 
   if (length(normal) > params.surface_tension_threshold) {
-    sum += -params.surface_tension * color_field_laplacian * normal /
-           length(normal);
+    sum = sum + (-params.surface_tension * color_field_laplacian * normal /
+           length(normal));
   }
 
   output_data[current_particle_index].acceleration =
-      sum /local_data[local_index].density;
+      sum /mlocal_Data[local_index].density;
 
-  output_data[current_particle_index].acceleration += params.constant_acceleration;
+  output_data[current_particle_index].acceleration = output_data[current_particle_index].acceleration + params.constant_acceleration;
 
   // Copy back the information into the ouput buffer
   //output_data[current_particle_index] = output_particle;
 }
 
-void kernel advection_collision(global const particle* input_data,
-                                global particle* output_data,
+__global__ void advection_collision( const particle* input_data,
+                                 particle* output_data,
                                 const float restitution,
                                 const float time_delta,
                                 const precomputed_kernel_values smoothing_terms,
-                                global const unsigned int* cell_table,
-                                global const float* df,
-                                global const BB* bboxs,
+                                 const unsigned int* cell_table,
+                                 const float* df,
+                                 const BB* bboxs,
                                 uint face_count
                                 ) {
-  const size_t current_particle_index = get_global_id(0);
+  const size_t current_particle_index = blockIdx.x*blockDim.x+threadIdx.x;
   output_data[current_particle_index] = input_data[current_particle_index];
   particle output_particle = input_data[current_particle_index];
 
