@@ -474,27 +474,89 @@ void kernel computeDistanceField(
         }
     }
 
-float weigthedAverage(float x, float x1 , float x2,float d1, float d2){
+inline float weigthedAverage(float x, float x1 , float x2,float d1, float d2){
     return ((x2-x)/(x2-x1))*d1+((x-x1)/(x2-x1))*d2;
 }
 
-float bilinearInterpolation(float x, float y, float xmin , float ymin, float xmax, float ymax, float d00, float d01, float d10, float d11){
+inline float bilinearInterpolation(float x, float y, float xmin , float ymin, float xmax, float ymax, float d00, float d01, float d10, float d11){
     float R1 = weigthedAverage(x,xmin,xmax,d00,d10);
     float R2 = weigthedAverage(x,xmin,xmax,d01,d11);
     return weigthedAverage(y,ymin,ymax,R1,R2);
 }
 
-int getDFindex(BB bbox,float x, float y, float z, short a, short b, short c){
+inline int getDFindex(BB bbox,float x, float y, float z, short a, short b, short c){
     return bbox.offset + (y+b)*bbox.size_x*bbox.size_z+bbox.size_x*(z+c)+x+a;
 }
 
-collision_response handle_collisions(float3 old_position,
+collision_response handle_collisions_const(float3 old_position,
 	float3 position,
 	float3 next,
 	float restitution, float time_elapsed,
 	global const float* df,
-	global const BB* bboxs,
+        constant const BB* bboxs,
 	uint face_count) {
+        int indice =-1;
+        collision_response response = {
+            position, next, 0, time_elapsed,-1
+        };
+        for(int i=0;i<face_count;i++){
+            if(position.x<=bboxs[i].maxx && position.x>=bboxs[i].minx && position.y<=bboxs[i].maxy && position.y>=bboxs[i].miny && position.z<=bboxs[i].maxz && position.z>=bboxs[i].minz ){
+                indice = i;
+            }
+        }
+
+        if(indice>-1){
+            float sidex = (bboxs[indice].maxx-bboxs[indice].minx)/(bboxs[indice].size_x-1);
+            float sidey = (bboxs[indice].maxy-bboxs[indice].miny)/(bboxs[indice].size_y-1);
+            float sidez = (bboxs[indice].maxz-bboxs[indice].minz)/(bboxs[indice].size_z-1);
+
+            int x = (position.x - bboxs[indice].minx)/(sidex);
+            int y = (position.y - bboxs[indice].miny)/(sidey);
+            int z = (position.z - bboxs[indice].minz)/(sidez);
+
+            float bx = x*sidex+bboxs[indice].minx;
+            float by = y*sidey+bboxs[indice].miny;
+            float bz = z*sidez+bboxs[indice].minz;
+
+            float facedown = bilinearInterpolation(position.x,position.z, bx,bz,bx+sidex,bz+sidez,df[getDFindex(bboxs[indice],x,y,z,0,0,0)],df[getDFindex(bboxs[indice],x,y,z,0,0,1)],df[getDFindex(bboxs[indice],x,y,z,1,0,0)],df[getDFindex(bboxs[indice],x,y,z,1,0,1)]);
+            float faceup =   bilinearInterpolation(position.x,position.z, bx,bz,bx+sidex,bz+sidez,df[getDFindex(bboxs[indice],x,y,z,0,1,0)],df[getDFindex(bboxs[indice],x,y,z,0,1,1)],df[getDFindex(bboxs[indice],x,y,z,1,1,0)],df[getDFindex(bboxs[indice],x,y,z,1,1,1)]);
+
+            float d = weigthedAverage(position.y,by,by+sidey,facedown,faceup);
+            response.indice = indice;
+            if(d<0.02){
+                response.collision_happened = 1;
+                response.indice = indice*10;
+                float faceright  = bilinearInterpolation(position.y,position.z, by,bz,by+sidey,bz+sidez,df[getDFindex(bboxs[indice],x,y,z,1,0,0)],df[getDFindex(bboxs[indice],x,y,z,1,0,1)],df[getDFindex(bboxs[indice],x,y,z,1,1,0)],df[getDFindex(bboxs[indice],x,y,z,1,1,1)]);
+                float faceleft =  bilinearInterpolation(position.y,position.z, by,bz,by+sidey,bz+sidez,df[getDFindex(bboxs[indice],x,y,z,0,0,0)],df[getDFindex(bboxs[indice],x,y,z,0,0,1)],df[getDFindex(bboxs[indice],x,y,z,0,1,0)],df[getDFindex(bboxs[indice],x,y,z,0,1,1)]);
+
+                float faceback = bilinearInterpolation(position.x,position.y, bx,by,bx+sidex,by+sidey,df[getDFindex(bboxs[indice],x,y,z,0,0,0)],df[getDFindex(bboxs[indice],x,y,z,0,1,0)],df[getDFindex(bboxs[indice],x,y,z,1,0,0)],df[getDFindex(bboxs[indice],x,y,z,1,1,0)]);
+                float facefront = bilinearInterpolation(position.x,position.y, bx,by,bx+sidex,by+sidey,df[getDFindex(bboxs[indice],x,y,z,0,0,1)],df[getDFindex(bboxs[indice],x,y,z,0,1,1)],df[getDFindex(bboxs[indice],x,y,z,1,0,1)],df[getDFindex(bboxs[indice],x,y,z,1,1,1)]);
+
+                float3 normal = {
+                    (faceright- faceleft),
+                    (faceup-facedown),
+                    (facefront-faceback)
+                };
+                float lenn = length(normal);
+                normal/=lenn;
+
+                respond(&response, position, normal, restitution,fabs(d), time_elapsed);
+                response.time_elapsed = time_elapsed *
+                  (length(response.position - old_position) / length(position - old_position));
+
+            }
+        }
+
+        return response;
+    }
+
+collision_response handle_collisions(float3 old_position,
+        float3 position,
+        float3 next,
+        float restitution, float time_elapsed,
+        global const float* df,
+        global const BB* bboxs,
+        uint face_count) {
         int indice =-1;
         collision_response response = {
             position, next, 0, time_elapsed,-1
@@ -783,6 +845,59 @@ void kernel forces(global const particle* input_data,
 
   // Copy back the information into the ouput buffer
   //output_data[current_particle_index] = output_particle;
+}
+
+void kernel advection_collision_const(global const particle* input_data,
+                                global particle* output_data,
+                                const float restitution,
+                                const float time_delta,
+                                const precomputed_kernel_values smoothing_terms,
+                                global const unsigned int* cell_table,
+                                global const float* df,
+                                constant const BB* bboxs,
+                                uint face_count
+                                ) {
+  const size_t current_particle_index = get_global_id(0);
+  output_data[current_particle_index] = input_data[current_particle_index];
+  particle output_particle = input_data[current_particle_index];
+
+  float time_to_go =time_delta;
+  collision_response response;
+  float3 current_position = input_data[current_particle_index].position;
+  float3 current_velocity =
+      input_data[current_particle_index].intermediate_velocity;
+  float3 acceleration = output_particle.acceleration;
+
+  //do {
+    advection_result res =
+        advect(current_position, current_velocity, acceleration,
+               time_to_go);
+
+    response =
+        handle_collisions_const(
+            res.old_position, res.new_position, res.next_velocity,
+            restitution, time_to_go, df,bboxs, face_count);
+
+    current_position = response.position;
+    current_velocity = response.next_velocity;
+
+    time_to_go -= response.time_elapsed;
+
+    acceleration.x = 0.f;
+    acceleration.y = 0.f;
+    acceleration.z = 0.f;
+
+  //} while (response.collision_happened);
+
+  output_particle.velocity =
+      (input_data[current_particle_index].intermediate_velocity +
+       response.next_velocity) /
+      2.f;
+  output_particle.intermediate_velocity = response.next_velocity;
+  output_particle.position = response.position;
+
+  // Copy back the information into the ouput buffer
+  output_data[current_particle_index] = output_particle;
 }
 
 void kernel advection_collision(global const particle* input_data,

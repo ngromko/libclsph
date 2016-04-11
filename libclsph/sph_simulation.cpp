@@ -257,7 +257,14 @@ void sph_simulation::simulate() {
   cl::Program program;
   check_cl_error(make_program(&program, context_, device_array, source, true,
                               "-I ./kernels/ -I ./common/"));
+  unsigned int constantmem = running_device->getInfo<CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE>();
 
+  if(sizeof(BB)*current_scene.bbs.size()<=constantmem){
+      kernel_advection_collision_ = make_kernel(program, "advection_collision_const");
+  }
+  else{
+    kernel_advection_collision_ = make_kernel(program, "advection_collision");
+  }
   kernel_density_pressure_ = make_kernel(program, "density_pressure");
   kernel_advection_collision_ = make_kernel(program, "advection_collision");
   kernel_forces_ = make_kernel(program, "forces");
