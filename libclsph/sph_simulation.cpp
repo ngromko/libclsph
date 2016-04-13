@@ -412,6 +412,7 @@ void sph_simulation::simulate() {
       readParticle = executePostFrameOpperation(particles,front_buffer_,readParticle);
     }
   }
+  savet.join();
   delete[] particles;
 }
 

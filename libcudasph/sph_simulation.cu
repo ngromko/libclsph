@@ -15,6 +15,7 @@
 #include "sph_simulation.cuh"
 #include "common/util.cuh"
 #include "kernels/sph.cu"
+#include "cuda_profiler_api.h"
 
 #define check_cuda_error(error) if(error != cudaSuccess){ std::cerr << "A CUDA error occured (" << __FILE__ << ":" << __LINE__ << ")-> " <<error<< cudaGetErrorString(error) << std::endl; exit(2);}
 
@@ -172,7 +173,7 @@ void sph_simulation::simulate() {
   std::thread savet;
 
   bool readParticle = true;
-
+cudaProfilerStart();
   particle* front_buffer, *back_buffer;
 
   cudaMalloc((void**)&front_buffer, sizeof(particle)*parameters.particles_count);
@@ -274,6 +275,13 @@ void sph_simulation::simulate() {
       readParticle = executePostFrameOpperation(particles,front_buffer,readParticle);
     }
   }
+  savet.join();
+  cudaFree(df_buffer_);
+  cudaFree(bb_buffer_);
+  cudaFree(front_buffer);
+  cudaFree(back_buffer);
+  cudaFree(sort_count_buffer_);
+  cudaProfilerStop();
   delete[] particles;
 }
 
