@@ -46,7 +46,7 @@ void kernel forces(global const particle* input_data,
   const size_t group_size = get_local_size(0);
 
   local_data[local_index] = input_data[current_particle_index];
-  barrier(CLK_LOCAL_MEM_FENCE);
+  //barrier(CLK_LOCAL_MEM_FENCE);
   output_data[current_particle_index] = local_data[local_index];
 
   particle other;
@@ -69,11 +69,11 @@ void kernel forces(global const particle* input_data,
             grid_index, cell_table, params);
 
         for (size_t i = indices.x; i < indices.y; ++i) {
-            if(group_size*group_index <=i && i < group_size*group_index+group_size){
-                other=local_data[i-group_size*group_index];
-            }else{
+            //if(group_size*group_index <=i && i < group_size*group_index+group_size){
+            //    other=local_data[i-group_size*group_index];
+            //}else{
                 other=input_data[i];
-            }
+            //}
           if (i != current_particle_index) {
             //[kelager] (4.11)
             pressure_term +=

@@ -1,6 +1,9 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include <thread>
+#include <iostream>
+#include <fstream>
+using namespace std;
 
 #define EXIT_ON_CL_ERROR
 
@@ -110,40 +113,59 @@ void sph_simulation::sort_particles(cl::Buffer& first_buffer,
   cl::Buffer* current_input_buffer = &first_buffer;
   cl::Buffer* current_output_buffer = &second_buffer;
 
+  cl::Buffer sort_count_buffer_in= cl::Buffer(context_, CL_MEM_READ_WRITE,
+                                           kSortThreadCount * kBucketCount*sizeof(unsigned int));
+  cl::Buffer sort_count_buffer_out= cl::Buffer(context_, CL_MEM_READ_WRITE,
+                                           kSortThreadCount * kBucketCount*sizeof(unsigned int));
+  cl::Buffer tmpres_in= cl::Buffer(context_, CL_MEM_READ_WRITE,
+                                           kSortThreadCount * kBucketCount*sizeof(unsigned int)/128);
+
+  cl::Buffer tmpres_out= cl::Buffer(context_, CL_MEM_READ_WRITE,
+                                           kSortThreadCount * kBucketCount*sizeof(unsigned int)/128);
+
+  check_cl_error(kernel_prefix_sum.setArg(0, sort_count_buffer_in));
+  check_cl_error(kernel_prefix_sum.setArg(1, sort_count_buffer_out));
+  check_cl_error(kernel_prefix_sum.setArg(2, 128*4,NULL));
+  check_cl_error(kernel_prefix_sum.setArg(3, tmpres_in));
+  check_cl_error(kernel_prefix_sum.setArg(4,  128));
+
+  check_cl_error(kernel_prefix_sum2.setArg(0, tmpres_in));
+  check_cl_error(kernel_prefix_sum2.setArg(1, tmpres_out));
+  check_cl_error(kernel_prefix_sum2.setArg(2, kSortThreadCount*2*sizeof(unsigned int),NULL));
+  check_cl_error(kernel_prefix_sum2.setArg(3, kSortThreadCount*2));
+
+  check_cl_error(kernel_prefix_sum3.setArg(0, tmpres_out));
+  check_cl_error(kernel_prefix_sum3.setArg(1, sort_count_buffer_out));
+
   for (int pass_number = 0; pass_number < 4; ++pass_number) {
 
-    set_kernel_args(kernel_fill_uint_array_,sort_count_buffer_,0,kSortThreadCount * kBucketCount);
+    set_kernel_args(kernel_fill_uint_array_,sort_count_buffer_in,0,kSortThreadCount * kBucketCount);
     check_cl_error(queue_.enqueueNDRangeKernel(
         kernel_fill_uint_array_, cl::NullRange, cl::NDRange(kSortThreadCount * kBucketCount),
         cl::NullRange));
 
     set_kernel_args(kernel_sort_count_, *current_input_buffer,
-                    sort_count_buffer_, parameters, kSortThreadCount,
+                    sort_count_buffer_in, parameters, kSortThreadCount,
                     pass_number, kRadixWidth);
 
     check_cl_error(queue_.enqueueNDRangeKernel(
         kernel_sort_count_, cl::NullRange, cl::NDRange(kSortThreadCount),
         cl::NullRange));
 
-    check_cl_error(queue_.enqueueReadBuffer(
-        sort_count_buffer_, CL_TRUE, 0,
-        sizeof(unsigned int) * kSortThreadCount * kBucketCount,
-        sort_count_array_.data()));
+    check_cl_error(queue_.enqueueNDRangeKernel(
+        kernel_prefix_sum, cl::NullRange,
+        cl::NDRange(kSortThreadCount * kBucketCount/2), cl::NDRange(64)));
 
-    unsigned int running_count = 0;
-    for (int i = 0; i < kSortThreadCount * kBucketCount; ++i) {
-      unsigned int tmp = sort_count_array_[i];
-      sort_count_array_[i] = running_count;
-      running_count += tmp;
-    }
+    check_cl_error(queue_.enqueueNDRangeKernel(
+        kernel_prefix_sum2, cl::NullRange,
+        cl::NDRange(kSortThreadCount), cl::NDRange(kSortThreadCount)));
 
-    check_cl_error(queue_.enqueueWriteBuffer(
-        sort_count_buffer_, CL_TRUE, 0,
-        sizeof(unsigned int) * kSortThreadCount * kBucketCount,
-        sort_count_array_.data()));
+    check_cl_error(queue_.enqueueNDRangeKernel(
+        kernel_prefix_sum3, cl::NullRange,
+        cl::NDRange(kSortThreadCount*kBucketCount), cl::NDRange(kSortThreadCount)));
 
     set_kernel_args(kernel_sort_, *current_input_buffer, *current_output_buffer,
-                    sort_count_buffer_, parameters, kSortThreadCount,
+                    sort_count_buffer_out, parameters, kSortThreadCount,
                     pass_number, kRadixWidth);
 
     check_cl_error(queue_.enqueueNDRangeKernel(kernel_sort_, cl::NullRange,
@@ -278,6 +300,9 @@ void sph_simulation::simulate() {
   kernel_maximum_pos = make_kernel(program, "maximum_pos");
   kernel_maximum_vit = make_kernel(program, "maximum_vit");
   kernel_maximum_accel = make_kernel(program, "maximum_accel");
+  kernel_prefix_sum = make_kernel(program, "prefix_sum_1");
+  kernel_prefix_sum2 = make_kernel(program, "prefix_sum_2");
+  kernel_prefix_sum3 = make_kernel(program, "prefix_sum_3");
 
   cl::Buffer front_buffer_ =
       cl::Buffer(context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
@@ -295,10 +320,6 @@ void sph_simulation::simulate() {
       bb_buffer_, CL_TRUE, 0,
       sizeof(BB) * current_scene.bbs.size(), current_scene.bbs.data()));
 
-  sort_count_buffer_ =
-      cl::Buffer(context_, CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
-                 sizeof(unsigned int) * kSortThreadCount * kBucketCount);
-
   particle* particles = new particle[parameters.particles_count];
   init_particles(particles, parameters);
 
@@ -312,6 +333,7 @@ void sph_simulation::simulate() {
 
   //Get number of groups for reduction
   max_size_of_groups = size_of_groups = running_device->getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>();
+  kSortThreadCount = max_size_of_groups;
   max_unit= running_device->getInfo<CL_DEVICE_MAX_COMPUTE_UNITS>();
 
     // Calculate the optimal size for workgroups

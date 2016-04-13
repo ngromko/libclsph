@@ -52,6 +52,9 @@ class sph_simulation {
   cl::Kernel kernel_maximum_pos;
   cl::Kernel kernel_maximum_vit;
   cl::Kernel kernel_maximum_accel;
+  cl::Kernel kernel_prefix_sum;
+  cl::Kernel kernel_prefix_sum2;
+  cl::Kernel kernel_prefix_sum3;
 
   cl::Buffer df_buffer_;
   cl::Buffer bb_buffer_;
@@ -60,12 +63,12 @@ class sph_simulation {
   unsigned int size_of_groups;
   unsigned int max_size_of_groups;
 
-  static const int kSortThreadCount = 128;
+  int kSortThreadCount;
   static const int kBucketCount = 256;
   static const int kRadixWidth = 8;
 
-  std::array<unsigned int, kSortThreadCount * kBucketCount> sort_count_array_;
-  cl::Buffer sort_count_buffer_;
+  //std::array<unsigned int, kSortThreadCount * kBucketCount> sort_count_array_;
+  //cl::Buffer sort_count_buffer_;
 };
 
 #endif
