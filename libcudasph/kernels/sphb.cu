@@ -28,8 +28,6 @@ __global__ void forces(const particle* input_data,
                   const unsigned int* cell_table) {
   const size_t current_particle_index = blockIdx.x*blockDim.x+threadIdx.x;
   const size_t local_index = threadIdx.x;
-  const size_t group_index = blockIdx.x;
-  const size_t group_size = blockDim.x;
 
   particle* mlocal_Data = (particle*) local_data;
   mlocal_Data[local_index] = input_data[current_particle_index];
@@ -56,7 +54,11 @@ __global__ void forces(const particle* input_data,
             grid_index, cell_table, params);
 
         for (size_t i = indices.x; i < indices.y; ++i) {
-            other=input_data[i];
+            if(blockDim.x*blockIdx.x <=i && i < blockDim.x*(blockIdx.x+1)){
+                other=mlocal_Data[i-blockDim.x*blockIdx.x];
+            }else{
+                other=input_data[i];
+            }
           if (i != current_particle_index) {
             //[kelager] (4.11)
             pressure_term = pressure_term +
