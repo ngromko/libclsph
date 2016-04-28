@@ -3,7 +3,7 @@
 #include <iostream>
 #include <iomanip>
 #include <string>
-
+#include <ctime>
 #include "sph_simulation.h"
 #include "file_save_delegates/houdini_file_saver.h"
 #include "util/cereal/archives/binary.hpp"
@@ -99,9 +99,13 @@ int main(int argc, char** argv) {
 
     char response;
     std::cin >> response;
+    std::clock_t start;
+    double duration;
+start = std::clock();
     if(response != 'q') {
         simulation.simulate();
+        duration = ( std::clock() - start ) / (double) CLOCKS_PER_SEC;
     }
-
+    std::cout<<"Duration : "<< duration <<'\n';
     return 0;
 }

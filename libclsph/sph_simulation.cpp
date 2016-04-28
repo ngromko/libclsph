@@ -281,10 +281,11 @@ void sph_simulation::simulate() {
                               "-I ./kernels/ -I ./common/"));
   unsigned int constantmem = running_device->getInfo<CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE>();
 
-  if(sizeof(BB)*current_scene.bbs.size()<=constantmem){
+  if(sizeof(BB)*current_scene.bbs.size()*1000000<=constantmem){
       kernel_advection_collision_ = make_kernel(program, "advection_collision_const");
   }
   else{
+      std::cout<<"notconstant" << std::endl;
     kernel_advection_collision_ = make_kernel(program, "advection_collision");
   }
   kernel_density_pressure_ = make_kernel(program, "density_pressure");
@@ -367,13 +368,13 @@ void sph_simulation::simulate() {
     std::cout << "Simulating frame " << currentFrame << " (" << time<< "s)" << std::endl;
 
     if (!write_intermediate_frames && pre_frame) {
-        readParticle = executePreFrameOpperation(particles,front_buffer_,readParticle);
+        readParticle = executePreFrameOpperation(particles,front_buffer_,readParticle,true);
     }
 
     float timeleft=timeperframe;
     while(timeleft > 0.0) {
       if (write_intermediate_frames && pre_frame){
-         readParticle = executePreFrameOpperation(particles,front_buffer_,readParticle);
+         readParticle = executePreFrameOpperation(particles,front_buffer_,readParticle, false);
       }
       readParticle=true;
       dt=simulate_single_frame(front_buffer_,back_buffer_,dt);
@@ -392,7 +393,7 @@ void sph_simulation::simulate() {
         savet = std::thread([=] { save_frame(particles,parameters); });
       }
       if (write_intermediate_frames && post_frame){
-          readParticle = executePostFrameOpperation(particles,front_buffer_,readParticle);
+          readParticle = executePostFrameOpperation(particles,front_buffer_,readParticle,false);
       }
     }
     time+=timeperframe;
@@ -409,10 +410,12 @@ void sph_simulation::simulate() {
     }
 
     if (!write_intermediate_frames && post_frame) {
-      readParticle = executePostFrameOpperation(particles,front_buffer_,readParticle);
+      readParticle = executePostFrameOpperation(particles,front_buffer_,readParticle,true);
     }
   }
-  savet.join();
+  if(save_frame){
+    savet.join();
+  }
   delete[] particles;
 }
 
@@ -723,7 +726,7 @@ void sph_simulation::findMinMaxPosition(cl::Buffer& input_buffer){
     );
 }
 
-bool sph_simulation::executePreFrameOpperation(particle* particles, cl::Buffer& buffer, bool readParticle){
+bool sph_simulation::executePreFrameOpperation(particle* particles, cl::Buffer& buffer, bool readParticle, bool isFullFrame){
 
     //Only read particle if not already done
     if(readParticle){
@@ -733,7 +736,7 @@ bool sph_simulation::executePreFrameOpperation(particle* particles, cl::Buffer& 
         readParticle=false;
     }
     //Only write particle id needed
-  if(pre_frame(particles, parameters)){
+  if(pre_frame(particles, parameters,isFullFrame)){
       check_cl_error(queue_.enqueueWriteBuffer(
         buffer, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
         particles));
@@ -741,7 +744,7 @@ bool sph_simulation::executePreFrameOpperation(particle* particles, cl::Buffer& 
   return readParticle;
 }
 
-bool sph_simulation::executePostFrameOpperation(particle* particles, cl::Buffer& buffer, bool readParticle){
+bool sph_simulation::executePostFrameOpperation(particle* particles, cl::Buffer& buffer, bool readParticle, bool isFullFrame){
 
     //Only read particle if not already done
     if(readParticle){
@@ -751,7 +754,7 @@ bool sph_simulation::executePostFrameOpperation(particle* particles, cl::Buffer&
         readParticle=false;
     }
     //Only write particle id needed
-  if(post_frame(particles, parameters)){
+  if(post_frame(particles, parameters,isFullFrame)){
       check_cl_error(queue_.enqueueWriteBuffer(
         buffer, CL_TRUE, 0, sizeof(particle) * parameters.particles_count,
         particles));

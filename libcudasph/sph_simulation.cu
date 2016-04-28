@@ -233,13 +233,13 @@ cudaProfilerStart();
     std::cout << "Simulating frame " << currentFrame << " (" << time<< "s)" << std::endl;
 
     if (!write_intermediate_frames && pre_frame) {
-        readParticle = executePreFrameOpperation(particles,front_buffer,readParticle);
+        readParticle = executePreFrameOpperation(particles,front_buffer,readParticle,true);
     }
 
     float timeleft=timeperframe;
     while(timeleft > 0.0) {
       if (write_intermediate_frames && pre_frame){
-         readParticle = executePreFrameOpperation(particles,front_buffer,readParticle);
+         readParticle = executePreFrameOpperation(particles,front_buffer,readParticle,false);
       }
       readParticle=true;
       dt=simulate_single_frame(front_buffer,back_buffer,dt);
@@ -257,7 +257,7 @@ cudaProfilerStart();
         savet = std::thread([=] { save_frame(particles,parameters); });
       }
       if (write_intermediate_frames && post_frame){
-          readParticle = executePostFrameOpperation(particles,front_buffer,readParticle);
+          readParticle = executePostFrameOpperation(particles,front_buffer,readParticle,false);
       }
     }
     time+=timeperframe;
@@ -272,10 +272,12 @@ cudaProfilerStart();
     }
 
     if (!write_intermediate_frames && post_frame) {
-      readParticle = executePostFrameOpperation(particles,front_buffer,readParticle);
+      readParticle = executePostFrameOpperation(particles,front_buffer,readParticle,true);
     }
   }
-  savet.join();
+  if(save_frame){
+    savet.join();
+  }
   cudaFree(df_buffer_);
   cudaFree(bb_buffer_);
   cudaFree(front_buffer);
@@ -554,7 +556,7 @@ void sph_simulation::findMinMaxPosition(particle* input_buffer){
     cudaFree(reducResult);
 }
 
-bool sph_simulation::executePreFrameOpperation(particle* particles, particle* buffer, bool readParticle){
+bool sph_simulation::executePreFrameOpperation(particle* particles, particle* buffer, bool readParticle, bool isFullFrame){
 
     //Only read particle if not already done
     if(readParticle){
@@ -562,13 +564,13 @@ bool sph_simulation::executePreFrameOpperation(particle* particles, particle* bu
         readParticle=false;
     }
     //Only write particle id needed
-  if(pre_frame(particles, parameters)){
+  if(pre_frame(particles, parameters,isFullFrame)){
       cudaMemcpy(buffer,particles,sizeof(particle)*parameters.particles_count,cudaMemcpyHostToDevice);
   }
   return readParticle;
 }
 
-bool sph_simulation::executePostFrameOpperation(particle* particles, particle* buffer, bool readParticle){
+bool sph_simulation::executePostFrameOpperation(particle* particles, particle* buffer, bool readParticle, bool isFullFrame){
 
     //Only read particle if not already done
     if(readParticle){
@@ -576,7 +578,7 @@ bool sph_simulation::executePostFrameOpperation(particle* particles, particle* b
         readParticle=false;
     }
     //Only write particle id needed
-  if(post_frame(particles, parameters)){
+  if(post_frame(particles, parameters,isFullFrame)){
       cudaMemcpy(buffer,particles,sizeof(particle)*parameters.particles_count,cudaMemcpyHostToDevice);
   }
   return readParticle;

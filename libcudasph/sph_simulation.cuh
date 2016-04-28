@@ -15,9 +15,9 @@ class sph_simulation {
   simulation_parameters parameters;
   precomputed_kernel_values precomputed_terms;
 
-  std::function<bool(particle*, const simulation_parameters&)> pre_frame;
+  std::function<bool(particle*, const simulation_parameters&, bool)> pre_frame;
   std::function<void(particle*, const simulation_parameters&)> save_frame;
-  std::function<bool(particle*, const simulation_parameters&)> post_frame;
+  std::function<bool(particle*, const simulation_parameters&, bool)> post_frame;
 
   void load_settings(std::string fluid_file_name,
                      std::string parameters_file_name);
@@ -34,8 +34,8 @@ class sph_simulation {
   float computeTimeStep(particle*);
   void computeDistanceField();
   void findMinMaxPosition(particle*);
-  bool executePreFrameOpperation(particle *, particle*, bool);
-  bool executePostFrameOpperation(particle *, particle*, bool);
+  bool executePreFrameOpperation(particle *, particle*, bool, bool);
+  bool executePostFrameOpperation(particle *, particle*, bool, bool);
   int getNumBlock(unsigned int);
 
   float* df_buffer_;
