@@ -62,4 +62,3 @@ void kernel locate_in_grid(global const particle* particles,
 
   out_particles[current_particle_index].grid_index = grid_index;
 }
-

@@ -30,12 +30,12 @@ class sph_simulation {
  private:
   void init_particles(particle* buffer, const simulation_parameters&);
   void sort_particles(particle*, particle*, unsigned int*);
-  float simulate_single_frame(particle*,particle*,float);
+  float simulate_single_frame(particle*, particle*, float);
   float computeTimeStep(particle*);
   void computeDistanceField();
   void findMinMaxPosition(particle*);
-  bool executePreFrameOpperation(particle *, particle*, bool, bool);
-  bool executePostFrameOpperation(particle *, particle*, bool, bool);
+  bool executePreFrameOpperation(particle*, particle*, bool, bool);
+  bool executePostFrameOpperation(particle*, particle*, bool, bool);
   int getNumBlock(unsigned int);
 
   float* df_buffer_;

@@ -1,11 +1,9 @@
 #define KERNEL_INCLUDE
 
-void kernel fillUintArray(global uint* bob ,uint value,uint length){
-    uint id = get_global_id(0);
-    if(id<length)
-        bob[id]=value;
+void kernel fillUintArray(global uint* bob, uint value, uint length) {
+  uint id = get_global_id(0);
+  if (id < length) bob[id] = value;
 }
-
 #ifndef _STRUCTURES_H_
 #define _STRUCTURES_H_
 
@@ -60,16 +58,16 @@ typedef struct {
 } precomputed_kernel_values;
 
 typedef struct {
-    float maxx;
-    float maxy;
-    float maxz;
-    float minx;
-    float miny;
-    float minz;
-    size_t size_x;
-    size_t size_y;
-    size_t size_z;
-    size_t offset;
+  float maxx;
+  float maxy;
+  float maxz;
+  float minx;
+  float miny;
+  float minz;
+  size_t size_x;
+  size_t size_y;
+  size_t size_z;
+  size_t offset;
 } BB;
 
 #endif
@@ -236,7 +234,6 @@ void kernel locate_in_grid(global const particle* particles,
 }
 
 
-
 float compute_density_with_grid(
     size_t current_particle_index, global const particle* others,
     const simulation_parameters params,
@@ -348,270 +345,340 @@ float3 compute_internal_forces_with_grid(
 }
 
 typedef struct {
-	float3 position, next_velocity;
-	int collision_happened;
-	float time_elapsed;
-	int indice;
+  float3 position, next_velocity;
+  int collision_happened;
+  float time_elapsed;
+  int indice;
 } collision_response;
 
-int respond(collision_response* response, float3 p, float3 normal,float restitution,float d, float time_elapsed) {
-	//hack to avoid points directly on the faces, the collision detection code should be
-	response->position = p + d*normal;
+int respond(collision_response* response, float3 p, float3 normal,
+            float restitution, float d, float time_elapsed) {
+  // hack to avoid points directly on the faces, the collision detection code
+  // should be
+  response->position = p + d * normal;
 
-	response->next_velocity -=
-		(1.f +
-			restitution *
-			d /
-			(time_elapsed * length(response->next_velocity))) *
-		dot(response->next_velocity, normal) * normal;
-		//response->bob = normal;
+  response->next_velocity -=
+      (1.f +
+       restitution * d / (time_elapsed * length(response->next_velocity))) *
+      dot(response->next_velocity, normal) * normal;
+  // response->bob = normal;
 
-	return 1;
+  return 1;
 }
 
-float det(float x1, float y1,float x2, float y2){
-    return x1*y2 - y1*x2;
+float det(float x1, float y1, float x2, float y2) { return x1 * y2 - y1 * x2; }
+
+float distPointDroite(float x, float y, float z, float x1, float y1, float x2,
+                      float y2) {
+  float A = y - x1;
+  float B = z - y1;
+  float C = x2 - x1;
+  float D = y2 - y1;
+
+  float dot = A * C + B * D;
+  float len_sq = C * C + D * D;
+  float param = -1;
+  if (len_sq != 0)  // in case of 0 length line
+    param = dot / len_sq;
+
+  float xx, yy;
+
+  if (param < 0) {
+    xx = x1;
+    yy = y1;
+  } else if (param > 1) {
+    xx = x2;
+    yy = y2;
+  } else {
+    xx = x1 + param * C;
+    yy = y1 + param * D;
+  }
+
+  float dy = y - xx;
+  float dz = z - yy;
+  return sqrt(x * x + dz * dz + dy * dy);
 }
 
-float distPointDroite(float x, float y, float z, float x1, float y1, float x2, float y2){
-    float A = y - x1;
-    float B = z - y1;
-    float C = x2 - x1;
-    float D = y2 - y1;
+void kernel computeDistanceField(global float* df, global const BB* bboxs,
+                                 global const float* transforms,
+                                 global const float* rvertices, uint face_count,
+                                 uint gridcount) {
+  int indice = face_count - 1;
+  int toffset = bboxs[indice].offset;
+  float temd = 20;
+  const size_t current_df_index = get_global_id(0);
+  while (toffset > current_df_index && indice > 0) {
+    indice--;
+    toffset = bboxs[indice].offset;
+  }
+  if (current_df_index < gridcount) {
+    int x = ((current_df_index - toffset) %
+             (bboxs[indice].size_x * bboxs[indice].size_z)) %
+            bboxs[indice].size_x;
+    int z = ((current_df_index - toffset) %
+             (bboxs[indice].size_x * bboxs[indice].size_z)) /
+            bboxs[indice].size_x;
+    int y = (current_df_index - toffset) /
+            (bboxs[indice].size_x * bboxs[indice].size_z);
 
-    float dot = A * C + B * D;
-    float len_sq = C * C + D * D;
-    float param = -1;
-    if (len_sq != 0) //in case of 0 length line
-      param = dot / len_sq;
+    float px = x * (bboxs[indice].maxx - bboxs[indice].minx) /
+                   (bboxs[indice].size_x - 1) +
+               bboxs[indice].minx;
+    float py = y * (bboxs[indice].maxy - bboxs[indice].miny) /
+                   (bboxs[indice].size_y - 1) +
+               bboxs[indice].miny;
+    float pz = z * (bboxs[indice].maxz - bboxs[indice].minz) /
+                   (bboxs[indice].size_z - 1) +
+               bboxs[indice].minz;
 
-    float xx, yy;
+    for (int i = 0; i < face_count; i++) {
+      if (px <= bboxs[i].maxx && px >= bboxs[i].minx && py <= bboxs[i].maxy &&
+          py >= bboxs[i].miny && pz <= bboxs[i].maxz && pz >= bboxs[i].minz) {
+        float tpx = px + transforms[i * 12 + 3];
+        float tpy = py + transforms[i * 12 + 7];
+        float tpz = pz + transforms[i * 12 + 11];
 
-    if (param < 0) {
-        xx = x1;
-        yy = y1;
+        float rpx = transforms[i * 12] * tpx + transforms[i * 12 + 1] * tpy +
+                    transforms[i * 12 + 2] * tpz;
+        float rpy = transforms[i * 12 + 4] * tpx +
+                    transforms[i * 12 + 5] * tpy + transforms[i * 12 + 6] * tpz;
+        float rpz = transforms[i * 12 + 8] * tpx +
+                    transforms[i * 12 + 9] * tpy +
+                    transforms[i * 12 + 10] * tpz;
+
+        float v1y = rvertices[4 * i + 1];
+        float v2x = rvertices[4 * i + 2];
+        float v2y = rvertices[4 * i + 3];
+
+        float a = det(rpy, rpz, 0, v1y) / det(v2x, v2y, 0, v1y);
+
+        float b = -det(rpy, rpz, v2x, v2y) / det(v2x, v2y, 0, v1y);
+
+        float d, td;
+        if (a > 0 && b > 0 && a + b < 1)
+          d = fabs(rpx);
+        else {
+          d = distPointDroite(rpx, rpy, rpz, 0, 0, rvertices[4 * i],
+                              rvertices[4 * i + 1]);
+          td = distPointDroite(rpx, rpy, rpz, rvertices[4 * i],
+                               rvertices[4 * i + 1], rvertices[4 * i + 2],
+                               rvertices[4 * i + 3]);
+          if (td < d) {
+            d = td;
+          }
+          td = distPointDroite(rpx, rpy, rpz, 0, 0, rvertices[4 * i + 2],
+                               rvertices[4 * i + 3]);
+          if (td < d) {
+            d = td;
+          }
+        }
+        if (d < fabs(temd)) {
+          temd = copysign(d, rpx);
+        }
+      }
     }
-    else if (param > 1) {
-        xx = x2;
-        yy = y2;
-    }
-    else {
-        xx = x1 + param * C;
-        yy = y1 + param * D;
-    }
 
-    float dy = y - xx;
-    float dz = z - yy;
-    return sqrt(x*x +dz * dz + dy * dy);
-
+    df[current_df_index] = temd;
+  }
 }
 
-void kernel computeDistanceField(
-    global float* df,
-    global const BB* bboxs,
-    global const float* transforms,
-    global const float* rvertices,
-    uint face_count,
-    uint gridcount
-    ) {
-        int indice =face_count-1;
-        int toffset =bboxs[indice].offset;
-        float temd= 20;
-        const size_t current_df_index = get_global_id(0);
-        while(toffset>current_df_index && indice>0){
-            indice--;
-            toffset = bboxs[indice].offset;
-        }
-        if(current_df_index<gridcount){
-            int x = ((current_df_index-toffset)%(bboxs[indice].size_x*bboxs[indice].size_z))%bboxs[indice].size_x;
-            int z = ((current_df_index-toffset)%(bboxs[indice].size_x*bboxs[indice].size_z))/bboxs[indice].size_x;
-            int y = (current_df_index-toffset)/(bboxs[indice].size_x*bboxs[indice].size_z);
-
-            float px = x*(bboxs[indice].maxx-bboxs[indice].minx)/(bboxs[indice].size_x-1)+bboxs[indice].minx;
-            float py = y*(bboxs[indice].maxy-bboxs[indice].miny)/(bboxs[indice].size_y-1)+bboxs[indice].miny;
-            float pz = z*(bboxs[indice].maxz-bboxs[indice].minz)/(bboxs[indice].size_z-1)+bboxs[indice].minz;
-
-            for(int i=0;i<face_count;i++){
-                if(px<=bboxs[i].maxx && px>=bboxs[i].minx && py<=bboxs[i].maxy && py>=bboxs[i].miny && pz<=bboxs[i].maxz && pz>=bboxs[i].minz ){
-                    float tpx = px + transforms[i*12+3];
-                    float tpy= py  + transforms[i*12+7];
-                    float tpz=pz + transforms[i*12+11];
-
-                    float rpx= transforms[i*12]*tpx + transforms[i*12+1]*tpy + transforms[i*12+2]*tpz ;
-                    float rpy= transforms[i*12+4]*tpx + transforms[i*12+5]*tpy + transforms[i*12+6]*tpz;
-                    float rpz= transforms[i*12+8]*tpx + transforms[i*12+9]*tpy + transforms[i*12+10]*tpz;
-
-                    float v1y = rvertices[4*i+1];
-                    float v2x = rvertices[4*i+2];
-                    float v2y = rvertices[4*i+3];
-
-                    float a=det(rpy,rpz,0,v1y)/det(v2x,v2y,0,v1y);
-
-                    float b=-det(rpy,rpz,v2x,v2y)/det(v2x,v2y,0,v1y);
-
-                    float d, td;
-                    if(a>0 && b>0 && a+b<1)
-                        d= fabs(rpx);
-                    else{
-                        d=distPointDroite(rpx,rpy,rpz,0,0,rvertices[4*i],rvertices[4*i+1]);
-                        td = distPointDroite(rpx,rpy,rpz,rvertices[4*i],rvertices[4*i+1],rvertices[4*i+2],rvertices[4*i+3]);
-                        if(td<d){
-                            d=td;
-                        }
-                        td=distPointDroite(rpx,rpy,rpz,0,0,rvertices[4*i+2],rvertices[4*i+3]);
-                        if(td<d){
-                            d=td;
-                        }
-                    }
-                    if(d<fabs(temd)){
-                        temd=copysign(d,rpx);
-                    }
-
-                }
-            }
-
-            df[current_df_index]= temd;
-        }
-    }
-
-inline float weigthedAverage(float x, float x1 , float x2,float d1, float d2){
-    return ((x2-x)/(x2-x1))*d1+((x-x1)/(x2-x1))*d2;
+inline float weigthedAverage(float x, float x1, float x2, float d1, float d2) {
+  return ((x2 - x) / (x2 - x1)) * d1 + ((x - x1) / (x2 - x1)) * d2;
 }
 
-inline float bilinearInterpolation(float x, float y, float xmin , float ymin, float xmax, float ymax, float d00, float d01, float d10, float d11){
-    float R1 = weigthedAverage(x,xmin,xmax,d00,d10);
-    float R2 = weigthedAverage(x,xmin,xmax,d01,d11);
-    return weigthedAverage(y,ymin,ymax,R1,R2);
+inline float bilinearInterpolation(float x, float y, float xmin, float ymin,
+                                   float xmax, float ymax, float d00, float d01,
+                                   float d10, float d11) {
+  float R1 = weigthedAverage(x, xmin, xmax, d00, d10);
+  float R2 = weigthedAverage(x, xmin, xmax, d01, d11);
+  return weigthedAverage(y, ymin, ymax, R1, R2);
 }
 
-inline int getDFindex(BB bbox,float x, float y, float z, short a, short b, short c){
-    return bbox.offset + (y+b)*bbox.size_x*bbox.size_z+bbox.size_x*(z+c)+x+a;
+inline int getDFindex(BB bbox, float x, float y, float z, short a, short b,
+                      short c) {
+  return bbox.offset + (y + b) * bbox.size_x * bbox.size_z +
+         bbox.size_x * (z + c) + x + a;
 }
 
-collision_response handle_collisions_const(float3 old_position,
-	float3 position,
-	float3 next,
-	float restitution, float time_elapsed,
-	global const float* df,
-        constant const BB* bboxs,
-	uint face_count) {
-        int indice =-1;
-        collision_response response = {
-            position, next, 0, time_elapsed,-1
-        };
-        for(int i=0;i<face_count;i++){
-            if(position.x<=bboxs[i].maxx && position.x>=bboxs[i].minx && position.y<=bboxs[i].maxy && position.y>=bboxs[i].miny && position.z<=bboxs[i].maxz && position.z>=bboxs[i].minz ){
-                indice = i;
-            }
-        }
-
-        if(indice>-1){
-            float sidex = (bboxs[indice].maxx-bboxs[indice].minx)/(bboxs[indice].size_x-1);
-            float sidey = (bboxs[indice].maxy-bboxs[indice].miny)/(bboxs[indice].size_y-1);
-            float sidez = (bboxs[indice].maxz-bboxs[indice].minz)/(bboxs[indice].size_z-1);
-
-            int x = (position.x - bboxs[indice].minx)/(sidex);
-            int y = (position.y - bboxs[indice].miny)/(sidey);
-            int z = (position.z - bboxs[indice].minz)/(sidez);
-
-            float bx = x*sidex+bboxs[indice].minx;
-            float by = y*sidey+bboxs[indice].miny;
-            float bz = z*sidez+bboxs[indice].minz;
-
-            float facedown = bilinearInterpolation(position.x,position.z, bx,bz,bx+sidex,bz+sidez,df[getDFindex(bboxs[indice],x,y,z,0,0,0)],df[getDFindex(bboxs[indice],x,y,z,0,0,1)],df[getDFindex(bboxs[indice],x,y,z,1,0,0)],df[getDFindex(bboxs[indice],x,y,z,1,0,1)]);
-            float faceup =   bilinearInterpolation(position.x,position.z, bx,bz,bx+sidex,bz+sidez,df[getDFindex(bboxs[indice],x,y,z,0,1,0)],df[getDFindex(bboxs[indice],x,y,z,0,1,1)],df[getDFindex(bboxs[indice],x,y,z,1,1,0)],df[getDFindex(bboxs[indice],x,y,z,1,1,1)]);
-
-            float d = weigthedAverage(position.y,by,by+sidey,facedown,faceup);
-            response.indice = indice;
-            if(d<0.02){
-                response.collision_happened = 1;
-                response.indice = indice*10;
-                float faceright  = bilinearInterpolation(position.y,position.z, by,bz,by+sidey,bz+sidez,df[getDFindex(bboxs[indice],x,y,z,1,0,0)],df[getDFindex(bboxs[indice],x,y,z,1,0,1)],df[getDFindex(bboxs[indice],x,y,z,1,1,0)],df[getDFindex(bboxs[indice],x,y,z,1,1,1)]);
-                float faceleft =  bilinearInterpolation(position.y,position.z, by,bz,by+sidey,bz+sidez,df[getDFindex(bboxs[indice],x,y,z,0,0,0)],df[getDFindex(bboxs[indice],x,y,z,0,0,1)],df[getDFindex(bboxs[indice],x,y,z,0,1,0)],df[getDFindex(bboxs[indice],x,y,z,0,1,1)]);
-
-                float faceback = bilinearInterpolation(position.x,position.y, bx,by,bx+sidex,by+sidey,df[getDFindex(bboxs[indice],x,y,z,0,0,0)],df[getDFindex(bboxs[indice],x,y,z,0,1,0)],df[getDFindex(bboxs[indice],x,y,z,1,0,0)],df[getDFindex(bboxs[indice],x,y,z,1,1,0)]);
-                float facefront = bilinearInterpolation(position.x,position.y, bx,by,bx+sidex,by+sidey,df[getDFindex(bboxs[indice],x,y,z,0,0,1)],df[getDFindex(bboxs[indice],x,y,z,0,1,1)],df[getDFindex(bboxs[indice],x,y,z,1,0,1)],df[getDFindex(bboxs[indice],x,y,z,1,1,1)]);
-
-                float3 normal = {
-                    (faceright- faceleft),
-                    (faceup-facedown),
-                    (facefront-faceback)
-                };
-                float lenn = length(normal);
-                normal/=lenn;
-
-                respond(&response, position, normal, restitution,fabs(d), time_elapsed);
-                response.time_elapsed = time_elapsed *
-                  (length(response.position - old_position) / length(position - old_position));
-
-            }
-        }
-
-        return response;
+collision_response handle_collisions_const(float3 old_position, float3 position,
+                                           float3 next, float restitution,
+                                           float time_elapsed,
+                                           global const float* df,
+                                           constant const BB* bboxs,
+                                           uint face_count) {
+  int indice = -1;
+  collision_response response = {position, next, 0, time_elapsed, -1};
+  for (int i = 0; i < face_count; i++) {
+    if (position.x <= bboxs[i].maxx && position.x >= bboxs[i].minx &&
+        position.y <= bboxs[i].maxy && position.y >= bboxs[i].miny &&
+        position.z <= bboxs[i].maxz && position.z >= bboxs[i].minz) {
+      indice = i;
     }
+  }
 
-collision_response handle_collisions(float3 old_position,
-        float3 position,
-        float3 next,
-        float restitution, float time_elapsed,
-        global const float* df,
-        global const BB* bboxs,
-        uint face_count) {
-        int indice =-1;
-        collision_response response = {
-            position, next, 0, time_elapsed,-1
-        };
-        for(int i=0;i<face_count;i++){
-            if(position.x<=bboxs[i].maxx && position.x>=bboxs[i].minx && position.y<=bboxs[i].maxy && position.y>=bboxs[i].miny && position.z<=bboxs[i].maxz && position.z>=bboxs[i].minz ){
-                indice = i;
-            }
-        }
+  if (indice > -1) {
+    float sidex =
+        (bboxs[indice].maxx - bboxs[indice].minx) / (bboxs[indice].size_x - 1);
+    float sidey =
+        (bboxs[indice].maxy - bboxs[indice].miny) / (bboxs[indice].size_y - 1);
+    float sidez =
+        (bboxs[indice].maxz - bboxs[indice].minz) / (bboxs[indice].size_z - 1);
 
-        if(indice>-1){
-            float sidex = (bboxs[indice].maxx-bboxs[indice].minx)/(bboxs[indice].size_x-1);
-            float sidey = (bboxs[indice].maxy-bboxs[indice].miny)/(bboxs[indice].size_y-1);
-            float sidez = (bboxs[indice].maxz-bboxs[indice].minz)/(bboxs[indice].size_z-1);
+    int x = (position.x - bboxs[indice].minx) / (sidex);
+    int y = (position.y - bboxs[indice].miny) / (sidey);
+    int z = (position.z - bboxs[indice].minz) / (sidez);
 
-            int x = (position.x - bboxs[indice].minx)/(sidex);
-            int y = (position.y - bboxs[indice].miny)/(sidey);
-            int z = (position.z - bboxs[indice].minz)/(sidez);
+    float bx = x * sidex + bboxs[indice].minx;
+    float by = y * sidey + bboxs[indice].miny;
+    float bz = z * sidez + bboxs[indice].minz;
 
-            float bx = x*sidex+bboxs[indice].minx;
-            float by = y*sidey+bboxs[indice].miny;
-            float bz = z*sidez+bboxs[indice].minz;
+    float facedown = bilinearInterpolation(
+        position.x, position.z, bx, bz, bx + sidex, bz + sidez,
+        df[getDFindex(bboxs[indice], x, y, z, 0, 0, 0)],
+        df[getDFindex(bboxs[indice], x, y, z, 0, 0, 1)],
+        df[getDFindex(bboxs[indice], x, y, z, 1, 0, 0)],
+        df[getDFindex(bboxs[indice], x, y, z, 1, 0, 1)]);
+    float faceup = bilinearInterpolation(
+        position.x, position.z, bx, bz, bx + sidex, bz + sidez,
+        df[getDFindex(bboxs[indice], x, y, z, 0, 1, 0)],
+        df[getDFindex(bboxs[indice], x, y, z, 0, 1, 1)],
+        df[getDFindex(bboxs[indice], x, y, z, 1, 1, 0)],
+        df[getDFindex(bboxs[indice], x, y, z, 1, 1, 1)]);
 
-            float facedown = bilinearInterpolation(position.x,position.z, bx,bz,bx+sidex,bz+sidez,df[getDFindex(bboxs[indice],x,y,z,0,0,0)],df[getDFindex(bboxs[indice],x,y,z,0,0,1)],df[getDFindex(bboxs[indice],x,y,z,1,0,0)],df[getDFindex(bboxs[indice],x,y,z,1,0,1)]);
-            float faceup =   bilinearInterpolation(position.x,position.z, bx,bz,bx+sidex,bz+sidez,df[getDFindex(bboxs[indice],x,y,z,0,1,0)],df[getDFindex(bboxs[indice],x,y,z,0,1,1)],df[getDFindex(bboxs[indice],x,y,z,1,1,0)],df[getDFindex(bboxs[indice],x,y,z,1,1,1)]);
+    float d = weigthedAverage(position.y, by, by + sidey, facedown, faceup);
+    response.indice = indice;
+    if (d < 0.02) {
+      response.collision_happened = 1;
+      response.indice = indice * 10;
+      float faceright = bilinearInterpolation(
+          position.y, position.z, by, bz, by + sidey, bz + sidez,
+          df[getDFindex(bboxs[indice], x, y, z, 1, 0, 0)],
+          df[getDFindex(bboxs[indice], x, y, z, 1, 0, 1)],
+          df[getDFindex(bboxs[indice], x, y, z, 1, 1, 0)],
+          df[getDFindex(bboxs[indice], x, y, z, 1, 1, 1)]);
+      float faceleft = bilinearInterpolation(
+          position.y, position.z, by, bz, by + sidey, bz + sidez,
+          df[getDFindex(bboxs[indice], x, y, z, 0, 0, 0)],
+          df[getDFindex(bboxs[indice], x, y, z, 0, 0, 1)],
+          df[getDFindex(bboxs[indice], x, y, z, 0, 1, 0)],
+          df[getDFindex(bboxs[indice], x, y, z, 0, 1, 1)]);
 
-            float d = weigthedAverage(position.y,by,by+sidey,facedown,faceup);
-            response.indice = indice;
-            if(d<0.02){
-                response.collision_happened = 1;
-                response.indice = indice*10;
-                float faceright  = bilinearInterpolation(position.y,position.z, by,bz,by+sidey,bz+sidez,df[getDFindex(bboxs[indice],x,y,z,1,0,0)],df[getDFindex(bboxs[indice],x,y,z,1,0,1)],df[getDFindex(bboxs[indice],x,y,z,1,1,0)],df[getDFindex(bboxs[indice],x,y,z,1,1,1)]);
-                float faceleft =  bilinearInterpolation(position.y,position.z, by,bz,by+sidey,bz+sidez,df[getDFindex(bboxs[indice],x,y,z,0,0,0)],df[getDFindex(bboxs[indice],x,y,z,0,0,1)],df[getDFindex(bboxs[indice],x,y,z,0,1,0)],df[getDFindex(bboxs[indice],x,y,z,0,1,1)]);
+      float faceback = bilinearInterpolation(
+          position.x, position.y, bx, by, bx + sidex, by + sidey,
+          df[getDFindex(bboxs[indice], x, y, z, 0, 0, 0)],
+          df[getDFindex(bboxs[indice], x, y, z, 0, 1, 0)],
+          df[getDFindex(bboxs[indice], x, y, z, 1, 0, 0)],
+          df[getDFindex(bboxs[indice], x, y, z, 1, 1, 0)]);
+      float facefront = bilinearInterpolation(
+          position.x, position.y, bx, by, bx + sidex, by + sidey,
+          df[getDFindex(bboxs[indice], x, y, z, 0, 0, 1)],
+          df[getDFindex(bboxs[indice], x, y, z, 0, 1, 1)],
+          df[getDFindex(bboxs[indice], x, y, z, 1, 0, 1)],
+          df[getDFindex(bboxs[indice], x, y, z, 1, 1, 1)]);
 
-                float faceback = bilinearInterpolation(position.x,position.y, bx,by,bx+sidex,by+sidey,df[getDFindex(bboxs[indice],x,y,z,0,0,0)],df[getDFindex(bboxs[indice],x,y,z,0,1,0)],df[getDFindex(bboxs[indice],x,y,z,1,0,0)],df[getDFindex(bboxs[indice],x,y,z,1,1,0)]);
-                float facefront = bilinearInterpolation(position.x,position.y, bx,by,bx+sidex,by+sidey,df[getDFindex(bboxs[indice],x,y,z,0,0,1)],df[getDFindex(bboxs[indice],x,y,z,0,1,1)],df[getDFindex(bboxs[indice],x,y,z,1,0,1)],df[getDFindex(bboxs[indice],x,y,z,1,1,1)]);
+      float3 normal = {(faceright - faceleft), (faceup - facedown),
+                       (facefront - faceback)};
+      float lenn = length(normal);
+      normal /= lenn;
 
-                float3 normal = {
-                    (faceright- faceleft),
-                    (faceup-facedown),
-                    (facefront-faceback)
-                };
-                float lenn = length(normal);
-                normal/=lenn;
-
-                respond(&response, position, normal, restitution,fabs(d), time_elapsed);
-                response.time_elapsed = time_elapsed *
-                  (length(response.position - old_position) / length(position - old_position));
-
-            }
-        }
-
-        return response;
+      respond(&response, position, normal, restitution, fabs(d), time_elapsed);
+      response.time_elapsed =
+          time_elapsed * (length(response.position - old_position) /
+                          length(position - old_position));
     }
+  }
 
+  return response;
+}
+
+collision_response handle_collisions(float3 old_position, float3 position,
+                                     float3 next, float restitution,
+                                     float time_elapsed, global const float* df,
+                                     global const BB* bboxs, uint face_count) {
+  int indice = -1;
+  collision_response response = {position, next, 0, time_elapsed, -1};
+  for (int i = 0; i < face_count; i++) {
+    if (position.x <= bboxs[i].maxx && position.x >= bboxs[i].minx &&
+        position.y <= bboxs[i].maxy && position.y >= bboxs[i].miny &&
+        position.z <= bboxs[i].maxz && position.z >= bboxs[i].minz) {
+      indice = i;
+    }
+  }
+
+  if (indice > -1) {
+    float sidex =
+        (bboxs[indice].maxx - bboxs[indice].minx) / (bboxs[indice].size_x - 1);
+    float sidey =
+        (bboxs[indice].maxy - bboxs[indice].miny) / (bboxs[indice].size_y - 1);
+    float sidez =
+        (bboxs[indice].maxz - bboxs[indice].minz) / (bboxs[indice].size_z - 1);
+
+    int x = (position.x - bboxs[indice].minx) / (sidex);
+    int y = (position.y - bboxs[indice].miny) / (sidey);
+    int z = (position.z - bboxs[indice].minz) / (sidez);
+
+    float bx = x * sidex + bboxs[indice].minx;
+    float by = y * sidey + bboxs[indice].miny;
+    float bz = z * sidez + bboxs[indice].minz;
+
+    float facedown = bilinearInterpolation(
+        position.x, position.z, bx, bz, bx + sidex, bz + sidez,
+        df[getDFindex(bboxs[indice], x, y, z, 0, 0, 0)],
+        df[getDFindex(bboxs[indice], x, y, z, 0, 0, 1)],
+        df[getDFindex(bboxs[indice], x, y, z, 1, 0, 0)],
+        df[getDFindex(bboxs[indice], x, y, z, 1, 0, 1)]);
+    float faceup = bilinearInterpolation(
+        position.x, position.z, bx, bz, bx + sidex, bz + sidez,
+        df[getDFindex(bboxs[indice], x, y, z, 0, 1, 0)],
+        df[getDFindex(bboxs[indice], x, y, z, 0, 1, 1)],
+        df[getDFindex(bboxs[indice], x, y, z, 1, 1, 0)],
+        df[getDFindex(bboxs[indice], x, y, z, 1, 1, 1)]);
+
+    float d = weigthedAverage(position.y, by, by + sidey, facedown, faceup);
+    response.indice = indice;
+    if (d < 0.02) {
+      response.collision_happened = 1;
+      response.indice = indice * 10;
+      float faceright = bilinearInterpolation(
+          position.y, position.z, by, bz, by + sidey, bz + sidez,
+          df[getDFindex(bboxs[indice], x, y, z, 1, 0, 0)],
+          df[getDFindex(bboxs[indice], x, y, z, 1, 0, 1)],
+          df[getDFindex(bboxs[indice], x, y, z, 1, 1, 0)],
+          df[getDFindex(bboxs[indice], x, y, z, 1, 1, 1)]);
+      float faceleft = bilinearInterpolation(
+          position.y, position.z, by, bz, by + sidey, bz + sidez,
+          df[getDFindex(bboxs[indice], x, y, z, 0, 0, 0)],
+          df[getDFindex(bboxs[indice], x, y, z, 0, 0, 1)],
+          df[getDFindex(bboxs[indice], x, y, z, 0, 1, 0)],
+          df[getDFindex(bboxs[indice], x, y, z, 0, 1, 1)]);
+
+      float faceback = bilinearInterpolation(
+          position.x, position.y, bx, by, bx + sidex, by + sidey,
+          df[getDFindex(bboxs[indice], x, y, z, 0, 0, 0)],
+          df[getDFindex(bboxs[indice], x, y, z, 0, 1, 0)],
+          df[getDFindex(bboxs[indice], x, y, z, 1, 0, 0)],
+          df[getDFindex(bboxs[indice], x, y, z, 1, 1, 0)]);
+      float facefront = bilinearInterpolation(
+          position.x, position.y, bx, by, bx + sidex, by + sidey,
+          df[getDFindex(bboxs[indice], x, y, z, 0, 0, 1)],
+          df[getDFindex(bboxs[indice], x, y, z, 0, 1, 1)],
+          df[getDFindex(bboxs[indice], x, y, z, 1, 0, 1)],
+          df[getDFindex(bboxs[indice], x, y, z, 1, 1, 1)]);
+
+      float3 normal = {(faceright - faceleft), (faceup - facedown),
+                       (facefront - faceback)};
+      float lenn = length(normal);
+      normal /= lenn;
+
+      respond(&response, position, normal, restitution, fabs(d), time_elapsed);
+      response.time_elapsed =
+          time_elapsed * (length(response.position - old_position) /
+                          length(position - old_position));
+    }
+  }
+
+  return response;
+}
 constant const unsigned int mask = 0xFF;
 
 inline unsigned int get_count_offset(int index, unsigned int mask,
@@ -672,26 +739,23 @@ void kernel sort(global const particle* in_particles,
   }
 }
 
-void kernel fill_cell_table(
-	global const particle* particles,
-	global uint* cell_table,
-	uint particle_count,
-	uint cell_count) {
+void kernel fill_cell_table(global const particle* particles,
+                            global uint* cell_table, uint particle_count,
+                            uint cell_count) {
+  const size_t work_item_id = get_global_id(0);
 
-    const size_t work_item_id = get_global_id(0);
+  uint current_index = particles[work_item_id].grid_index;
 
-    uint current_index=particles[work_item_id].grid_index;
-
-    if(work_item_id<=particles[0].grid_index){
-        cell_table[work_item_id]=0;
+  if (work_item_id <= particles[0].grid_index) {
+    cell_table[work_item_id] = 0;
+  }
+  if (work_item_id > 0) {
+    uint diff = current_index - particles[work_item_id - 1].grid_index;
+    for (uint i = 0; i < diff; i++) {
+      cell_table[current_index] = work_item_id;
+      current_index--;
     }
-    if(work_item_id>0){
-        uint diff= current_index-  particles[work_item_id-1].grid_index;
-        for(uint i=0;i<diff;i++){
-            cell_table[current_index]=work_item_id;
-            current_index--;
-        }
-    }
+  }
 }
 
 /* size of counts = sizeof(size_t) * bucket_count * thread_count
@@ -721,117 +785,99 @@ void kernel sort_all(global const particle* particles,
 
 
 }*/
-//http://http.developer.nvidia.com/GPUGems3/gpugems3_ch39.html
-void kernel prefix_sum_1(global const uint* in_counts,
-                       global uint* out_counts,
-                       local uint* temp,
-                       global uint* tmpres,
-                       uint n
-                       ){
-    int gthid = get_global_id(0);
-    int thid = get_local_id(0);
-    int offset = 1;
+// http://http.developer.nvidia.com/GPUGems3/gpugems3_ch39.html
+void kernel prefix_sum_1(global const uint* in_counts, global uint* out_counts,
+                         local uint* temp, global uint* tmpres, uint n) {
+  int gthid = get_global_id(0);
+  int thid = get_local_id(0);
+  int offset = 1;
 
-    temp[2*thid] = in_counts[2*gthid]; // load input into shared memory
-    temp[2*thid+1] = in_counts[2*gthid+1];
+  temp[2 * thid] = in_counts[2 * gthid];  // load input into shared memory
+  temp[2 * thid + 1] = in_counts[2 * gthid + 1];
 
-    for (int d = n>>1; d > 0; d >>= 1)                    // build sum in place up the tree
-    {
-        barrier(CLK_LOCAL_MEM_FENCE);
-       if (thid < d)
-       {
-           int ai = offset*(2*thid+1)-1;
-           int bi = offset*(2*thid+2)-1;
-              temp[bi] += temp[ai];
-       }
-       offset *= 2;
-    }
-
-   if (thid == 0) {
-       tmpres[get_group_id(0)]=temp[n - 1];
-       temp[n - 1] = 0;
-   } // clear the last element
-   barrier(CLK_LOCAL_MEM_FENCE);
-
-
-
-   for (int d = 1; d < n; d *= 2) // traverse down tree & build scan
-   {
-        offset >>= 1;
-        barrier(CLK_LOCAL_MEM_FENCE);
-        if (thid < d)
-        {
-           int ai = offset*(2*thid+1)-1;
-           int bi = offset*(2*thid+2)-1;
-
-           float t = temp[ai];
-           temp[ai] = temp[bi];
-           temp[bi] += t;
-         }
-   }
+  for (int d = n >> 1; d > 0; d >>= 1)  // build sum in place up the tree
+  {
     barrier(CLK_LOCAL_MEM_FENCE);
+    if (thid < d) {
+      int ai = offset * (2 * thid + 1) - 1;
+      int bi = offset * (2 * thid + 2) - 1;
+      temp[bi] += temp[ai];
+    }
+    offset *= 2;
+  }
 
-   out_counts[2*gthid] = temp[2*thid]; // write results to device memory
-   out_counts[2*gthid+1] = temp[2*thid+1];
+  if (thid == 0) {
+    tmpres[get_group_id(0)] = temp[n - 1];
+    temp[n - 1] = 0;
+  }  // clear the last element
+  barrier(CLK_LOCAL_MEM_FENCE);
 
+  for (int d = 1; d < n; d *= 2)  // traverse down tree & build scan
+  {
+    offset >>= 1;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    if (thid < d) {
+      int ai = offset * (2 * thid + 1) - 1;
+      int bi = offset * (2 * thid + 2) - 1;
+
+      float t = temp[ai];
+      temp[ai] = temp[bi];
+      temp[bi] += t;
+    }
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+
+  out_counts[2 * gthid] = temp[2 * thid];  // write results to device memory
+  out_counts[2 * gthid + 1] = temp[2 * thid + 1];
 }
 
 void kernel prefix_sum_2(global const uint* blockSum_in,
-                       global uint* blockSum_out,
-                       local uint* temp,
-                       uint n
-                       ){
-    int gthid = get_global_id(0);
-    int thid = get_local_id(0);
-    int offset = 1;
+                         global uint* blockSum_out, local uint* temp, uint n) {
+  int gthid = get_global_id(0);
+  int thid = get_local_id(0);
+  int offset = 1;
 
-    temp[2*thid] = blockSum_in[2*gthid]; // load input into shared memory
-    temp[2*thid+1] = blockSum_in[2*gthid+1];
+  temp[2 * thid] = blockSum_in[2 * gthid];  // load input into shared memory
+  temp[2 * thid + 1] = blockSum_in[2 * gthid + 1];
 
-    for (int d = n>>1; d > 0; d >>= 1)                    // build sum in place up the tree
-    {
-        barrier(CLK_LOCAL_MEM_FENCE);
-       if (thid < d)
-       {
-           int ai = offset*(2*thid+1)-1;
-           int bi = offset*(2*thid+2)-1;
-              temp[bi] += temp[ai];
-       }
-       offset *= 2;
-    }
-
-   if (thid == 0) {
-       temp[n - 1] = 0;
-   } // clear the last element
-   barrier(CLK_LOCAL_MEM_FENCE);
-
-
-
-   for (int d = 1; d < n; d *= 2) // traverse down tree & build scan
-   {
-        offset >>= 1;
-        barrier(CLK_LOCAL_MEM_FENCE);
-        if (thid < d)
-        {
-           int ai = offset*(2*thid+1)-1;
-           int bi = offset*(2*thid+2)-1;
-
-           float t = temp[ai];
-           temp[ai] = temp[bi];
-           temp[bi] += t;
-         }
-   }
+  for (int d = n >> 1; d > 0; d >>= 1)  // build sum in place up the tree
+  {
     barrier(CLK_LOCAL_MEM_FENCE);
+    if (thid < d) {
+      int ai = offset * (2 * thid + 1) - 1;
+      int bi = offset * (2 * thid + 2) - 1;
+      temp[bi] += temp[ai];
+    }
+    offset *= 2;
+  }
 
+  if (thid == 0) {
+    temp[n - 1] = 0;
+  }  // clear the last element
+  barrier(CLK_LOCAL_MEM_FENCE);
 
-   blockSum_out[2*gthid] = temp[2*thid]; // write results to device memory
-   blockSum_out[2*gthid+1] = temp[2*thid+1];
+  for (int d = 1; d < n; d *= 2)  // traverse down tree & build scan
+  {
+    offset >>= 1;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    if (thid < d) {
+      int ai = offset * (2 * thid + 1) - 1;
+      int bi = offset * (2 * thid + 2) - 1;
+
+      float t = temp[ai];
+      temp[ai] = temp[bi];
+      temp[bi] += t;
+    }
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+
+  blockSum_out[2 * gthid] = temp[2 * thid];  // write results to device memory
+  blockSum_out[2 * gthid + 1] = temp[2 * thid + 1];
 }
 
-void kernel prefix_sum_3(global const uint* blockSum,
-                         global uint* counts){
-    int gthid = get_global_id(0);
-    counts[gthid] += blockSum[gthid/128];
+void kernel prefix_sum_3(global const uint* blockSum, global uint* counts) {
+  int gthid = get_global_id(0);
+  counts[gthid] += blockSum[gthid / 128];
 }
 
 typedef struct {
@@ -839,8 +885,7 @@ typedef struct {
 } advection_result;
 
 advection_result advect(float3 current_position, float3 intermediate_velocity,
-                        float3 acceleration,
-                        float time_elapsed) {
+                        float3 acceleration, float time_elapsed) {
   advection_result res;
 
   res.old_position = current_position;
@@ -889,8 +934,7 @@ void kernel density_pressure(global const particle* input_data,
 }
 
 void kernel forces(global const particle* input_data,
-                   global particle* output_data,
-                   local particle* local_data,
+                   global particle* output_data, local particle* local_data,
                    const simulation_parameters params,
                    const precomputed_kernel_values smoothing_terms,
                    global const unsigned int* cell_table) {
@@ -900,7 +944,7 @@ void kernel forces(global const particle* input_data,
   const size_t group_size = get_local_size(0);
 
   local_data[local_index] = input_data[current_particle_index];
-  //barrier(CLK_LOCAL_MEM_FENCE);
+  // barrier(CLK_LOCAL_MEM_FENCE);
   output_data[current_particle_index] = local_data[local_index];
 
   particle other;
@@ -919,45 +963,44 @@ void kernel forces(global const particle* input_data,
     for (uint y = cell_coords.y - 1; y <= cell_coords.y + 1; ++y) {
       for (uint x = cell_coords.x - 1; x <= cell_coords.x + 1; ++x) {
         uint grid_index = get_grid_index_z_curve(x, y, z);
-        uint2 indices = get_start_end_indices_for_cell(
-            grid_index, cell_table, params);
+        uint2 indices =
+            get_start_end_indices_for_cell(grid_index, cell_table, params);
 
         for (size_t i = indices.x; i < indices.y; ++i) {
-            //if(group_size*group_index <=i && i < group_size*group_index+group_size){
-            //    other=local_data[i-group_size*group_index];
-            //}else{
-                other=input_data[i];
-            //}
+          // if(group_size*group_index <=i && i <
+          // group_size*group_index+group_size){
+          //    other=local_data[i-group_size*group_index];
+          //}else{
+          other = input_data[i];
+          //}
           if (i != current_particle_index) {
             //[kelager] (4.11)
-            pressure_term +=
-                (other.pressure / pown(other.density, 2) +
-                 local_data[local_index].pressure /
-                     pown(local_data[local_index].density, 2)) *
-                params.particle_mass *
-                spiky_gradient(local_data[local_index].position -
-                                   other.position,
-                               params.h, smoothing_terms);
+            pressure_term += (other.pressure / pown(other.density, 2) +
+                              local_data[local_index].pressure /
+                                  pown(local_data[local_index].density, 2)) *
+                             params.particle_mass *
+                             spiky_gradient(local_data[local_index].position -
+                                                other.position,
+                                            params.h, smoothing_terms);
 
             viscosity_term +=
                 (other.velocity - local_data[local_index].velocity) *
                 (params.particle_mass / other.density) *
                 viscosity_laplacian(
-                    length(local_data[local_index].position -
-                           other.position),
+                    length(local_data[local_index].position - other.position),
                     params.h, smoothing_terms);
           }
 
-          normal += params.particle_mass / other.density *
-                    poly_6_gradient(local_data[local_index].position -
-                                        other.position,
-                                    params.h, smoothing_terms);
+          normal +=
+              params.particle_mass / other.density *
+              poly_6_gradient(local_data[local_index].position - other.position,
+                              params.h, smoothing_terms);
 
           color_field_laplacian +=
               params.particle_mass / other.density *
-              poly_6_laplacian(length(local_data[local_index].position -
-                                      other.position),
-                               params.h, smoothing_terms);
+              poly_6_laplacian(
+                  length(local_data[local_index].position - other.position),
+                  params.h, smoothing_terms);
         }
       }
     }
@@ -972,53 +1015,50 @@ void kernel forces(global const particle* input_data,
   }
 
   output_data[current_particle_index].acceleration =
-      sum /local_data[local_index].density;
+      sum / local_data[local_index].density;
 
-  output_data[current_particle_index].acceleration += params.constant_acceleration;
+  output_data[current_particle_index].acceleration +=
+      params.constant_acceleration;
 
   // Copy back the information into the ouput buffer
-  //output_data[current_particle_index] = output_particle;
+  // output_data[current_particle_index] = output_particle;
 }
 
-void kernel advection_collision_const(global const particle* input_data,
-                                global particle* output_data,
-                                const float restitution,
-                                const float time_delta,
-                                const precomputed_kernel_values smoothing_terms,
-                                global const unsigned int* cell_table,
-                                global const float* df,
-                                constant const BB* bboxs,
-                                uint face_count
-                                ) {
+void kernel
+advection_collision_const(global const particle* input_data,
+                          global particle* output_data, const float restitution,
+                          const float time_delta,
+                          const precomputed_kernel_values smoothing_terms,
+                          global const unsigned int* cell_table,
+                          global const float* df, constant const BB* bboxs,
+                          uint face_count) {
   const size_t current_particle_index = get_global_id(0);
   output_data[current_particle_index] = input_data[current_particle_index];
   particle output_particle = input_data[current_particle_index];
 
-  float time_to_go =time_delta;
+  float time_to_go = time_delta;
   collision_response response;
   float3 current_position = input_data[current_particle_index].position;
   float3 current_velocity =
       input_data[current_particle_index].intermediate_velocity;
   float3 acceleration = output_particle.acceleration;
 
-  //do {
-    advection_result res =
-        advect(current_position, current_velocity, acceleration,
-               time_to_go);
+  // do {
+  advection_result res =
+      advect(current_position, current_velocity, acceleration, time_to_go);
 
-    response =
-        handle_collisions_const(
-            res.old_position, res.new_position, res.next_velocity,
-            restitution, time_to_go, df,bboxs, face_count);
+  response = handle_collisions_const(res.old_position, res.new_position,
+                                     res.next_velocity, restitution, time_to_go,
+                                     df, bboxs, face_count);
 
-    current_position = response.position;
-    current_velocity = response.next_velocity;
+  current_position = response.position;
+  current_velocity = response.next_velocity;
 
-    time_to_go -= response.time_elapsed;
+  time_to_go -= response.time_elapsed;
 
-    acceleration.x = 0.f;
-    acceleration.y = 0.f;
-    acceleration.z = 0.f;
+  acceleration.x = 0.f;
+  acceleration.y = 0.f;
+  acceleration.z = 0.f;
 
   //} while (response.collision_happened);
 
@@ -1035,43 +1075,38 @@ void kernel advection_collision_const(global const particle* input_data,
 
 void kernel advection_collision(global const particle* input_data,
                                 global particle* output_data,
-                                const float restitution,
-                                const float time_delta,
+                                const float restitution, const float time_delta,
                                 const precomputed_kernel_values smoothing_terms,
                                 global const unsigned int* cell_table,
-                                global const float* df,
-                                global const BB* bboxs,
-                                uint face_count
-                                ) {
+                                global const float* df, global const BB* bboxs,
+                                uint face_count) {
   const size_t current_particle_index = get_global_id(0);
   output_data[current_particle_index] = input_data[current_particle_index];
   particle output_particle = input_data[current_particle_index];
 
-  float time_to_go =time_delta;
+  float time_to_go = time_delta;
   collision_response response;
   float3 current_position = input_data[current_particle_index].position;
   float3 current_velocity =
       input_data[current_particle_index].intermediate_velocity;
   float3 acceleration = output_particle.acceleration;
 
-  //do {
-    advection_result res =
-        advect(current_position, current_velocity, acceleration,
-               time_to_go);
+  // do {
+  advection_result res =
+      advect(current_position, current_velocity, acceleration, time_to_go);
 
-    response =
-        handle_collisions(
-            res.old_position, res.new_position, res.next_velocity,
-            restitution, time_to_go, df,bboxs, face_count);
+  response =
+      handle_collisions(res.old_position, res.new_position, res.next_velocity,
+                        restitution, time_to_go, df, bboxs, face_count);
 
-    current_position = response.position;
-    current_velocity = response.next_velocity;
+  current_position = response.position;
+  current_velocity = response.next_velocity;
 
-    time_to_go -= response.time_elapsed;
+  time_to_go -= response.time_elapsed;
 
-    acceleration.x = 0.f;
-    acceleration.y = 0.f;
-    acceleration.z = 0.f;
+  acceleration.x = 0.f;
+  acceleration.y = 0.f;
+  acceleration.z = 0.f;
 
   //} while (response.collision_happened);
 
@@ -1086,150 +1121,126 @@ void kernel advection_collision(global const particle* input_data,
   output_data[current_particle_index] = output_particle;
 }
 
-
-__kernel
-void minimum_pos(__global particle* buffer,
-    __local float3* scratch,
-    __const int length,
-    __global float3* result) {
-
-    int global_index = get_global_id(0);
-    float3 accumulator = {INFINITY,INFINITY,INFINITY};
-    // Loop sequentially over chunks of input vector
-    while (global_index < length) {
-        float3 element = buffer[global_index].position;
-        accumulator.x = min(accumulator.x,element.x);
-        accumulator.y = min(accumulator.y,element.y);
-        accumulator.z = min(accumulator.z,element.z);
-        global_index += get_global_size(0);
-    }
+__kernel void minimum_pos(__global particle* buffer, __local float3* scratch,
+                          __const int length, __global float3* result) {
+  int global_index = get_global_id(0);
+  float3 accumulator = {INFINITY, INFINITY, INFINITY};
+  // Loop sequentially over chunks of input vector
+  while (global_index < length) {
+    float3 element = buffer[global_index].position;
+    accumulator.x = min(accumulator.x, element.x);
+    accumulator.y = min(accumulator.y, element.y);
+    accumulator.z = min(accumulator.z, element.z);
+    global_index += get_global_size(0);
+  }
 
   // Perform parallel reduction
-    int local_index = get_local_id(0);
-    scratch[local_index] = accumulator;
+  int local_index = get_local_id(0);
+  scratch[local_index] = accumulator;
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (int offset = get_local_size(0) / 2; offset > 0; offset = offset / 2) {
+    if (local_index < offset) {
+      float3 other = scratch[local_index + offset];
+      float3 mine = scratch[local_index];
+      scratch[local_index].x = min(mine.x, other.x);
+      scratch[local_index].y = min(mine.y, other.y);
+      scratch[local_index].z = min(mine.z, other.z);
+    }
     barrier(CLK_LOCAL_MEM_FENCE);
-    for(int offset = get_local_size(0) / 2;
-        offset > 0;
-        offset = offset / 2) {
-        if (local_index < offset) {
-            float3 other = scratch[local_index + offset];
-            float3 mine = scratch[local_index];
-            scratch[local_index].x = min(mine.x,other.x);
-            scratch[local_index].y = min(mine.y,other.y);
-            scratch[local_index].z = min(mine.z,other.z);
-        }
-        barrier(CLK_LOCAL_MEM_FENCE);
-    }
-    if (local_index == 0) {
-        result[get_group_id(0)] = scratch[0];
-    }
+  }
+  if (local_index == 0) {
+    result[get_group_id(0)] = scratch[0];
+  }
 }
 
-
-void kernel maximum_pos(global particle* buffer,
-    local float3* scratch,
-    const int length,
-    global float3* result) {
-
-    int global_index = get_global_id(0);
-    float3 accumulator = {-INFINITY,-INFINITY,-INFINITY};
-    // Loop sequentially over chunks of input vector
-    while (global_index < length) {
-        float3 element = buffer[global_index].position;
-        accumulator.x = max(accumulator.x,element.x);
-        accumulator.y = max(accumulator.y,element.y);
-        accumulator.z = max(accumulator.z,element.z);
-        global_index += get_global_size(0);
-    }
+void kernel maximum_pos(global particle* buffer, local float3* scratch,
+                        const int length, global float3* result) {
+  int global_index = get_global_id(0);
+  float3 accumulator = {-INFINITY, -INFINITY, -INFINITY};
+  // Loop sequentially over chunks of input vector
+  while (global_index < length) {
+    float3 element = buffer[global_index].position;
+    accumulator.x = max(accumulator.x, element.x);
+    accumulator.y = max(accumulator.y, element.y);
+    accumulator.z = max(accumulator.z, element.z);
+    global_index += get_global_size(0);
+  }
 
   // Perform parallel reduction
-    int local_index = get_local_id(0);
-    scratch[local_index] = accumulator;
+  int local_index = get_local_id(0);
+  scratch[local_index] = accumulator;
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (int offset = get_local_size(0) / 2; offset > 0; offset = offset / 2) {
+    if (local_index < offset) {
+      float3 other = scratch[local_index + offset];
+      float3 mine = scratch[local_index];
+      scratch[local_index].x = max(mine.x, other.x);
+      scratch[local_index].y = max(mine.y, other.y);
+      scratch[local_index].z = max(mine.z, other.z);
+    }
     barrier(CLK_LOCAL_MEM_FENCE);
-    for(int offset = get_local_size(0) / 2;
-        offset > 0;
-        offset = offset / 2) {
-        if (local_index < offset) {
-            float3 other = scratch[local_index + offset];
-            float3 mine = scratch[local_index];
-            scratch[local_index].x = max(mine.x,other.x);
-            scratch[local_index].y = max(mine.y,other.y);
-            scratch[local_index].z = max(mine.z,other.z);
-        }
-        barrier(CLK_LOCAL_MEM_FENCE);
-    }
-    if (local_index == 0) {
-        result[get_group_id(0)] = scratch[0];
-    }
+  }
+  if (local_index == 0) {
+    result[get_group_id(0)] = scratch[0];
+  }
 }
 
-__kernel
-void maximum_vit(__global particle* buffer,
-    __local float* scratch,
-    __const int length,
-    __global float* result) {
+__kernel void maximum_vit(__global particle* buffer, __local float* scratch,
+                          __const int length, __global float* result) {
+  int global_index = get_global_id(0);
+  float accumulator = -INFINITY;
+  // Loop sequentially over chunks of input vector
+  while (global_index < length) {
+    float3 element = buffer[global_index].velocity;
+    float vit =
+        element.x * element.x + element.y * element.y + element.z * element.z;
+    accumulator = max(accumulator, vit);
+    global_index += get_global_size(0);
+  }
 
-    int global_index = get_global_id(0);
-    float accumulator = -INFINITY;
-    // Loop sequentially over chunks of input vector
-    while (global_index < length) {
-        float3 element = buffer[global_index].velocity;
-        float vit = element.x*element.x + element.y*element.y + element.z*element.z;
-        accumulator = max(accumulator,vit);
-        global_index += get_global_size(0);
+  // Perform parallel reduction
+  int local_index = get_local_id(0);
+  scratch[local_index] = accumulator;
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (int offset = get_local_size(0) / 2; offset > 0; offset = offset / 2) {
+    if (local_index < offset) {
+      float other = scratch[local_index + offset];
+      float mine = scratch[local_index];
+      scratch[local_index] = max(mine, other);
     }
-
-    // Perform parallel reduction
-    int local_index = get_local_id(0);
-    scratch[local_index] = accumulator;
     barrier(CLK_LOCAL_MEM_FENCE);
-    for(int offset = get_local_size(0) / 2;
-        offset > 0;
-        offset = offset / 2) {
-        if (local_index < offset) {
-            float other = scratch[local_index + offset];
-            float mine = scratch[local_index];
-            scratch[local_index] = max(mine,other);
-        }
-        barrier(CLK_LOCAL_MEM_FENCE);
-    }
-    if (local_index == 0) {
-        result[get_group_id(0)] = scratch[0];
-    }
+  }
+  if (local_index == 0) {
+    result[get_group_id(0)] = scratch[0];
+  }
 }
 
-__kernel
-void maximum_accel(__global particle* buffer,
-    __local float* scratch,
-    __const int length,
-    __global float* result) {
+__kernel void maximum_accel(__global particle* buffer, __local float* scratch,
+                            __const int length, __global float* result) {
+  int global_index = get_global_id(0);
+  float accumulator = -INFINITY;
+  // Loop sequentially over chunks of input vector
+  while (global_index < length) {
+    float3 element = buffer[global_index].acceleration;
+    float vit =
+        element.x * element.x + element.y * element.y + element.z * element.z;
+    accumulator = max(accumulator, vit);
+    global_index += get_global_size(0);
+  }
 
-    int global_index = get_global_id(0);
-    float accumulator = -INFINITY;
-    // Loop sequentially over chunks of input vector
-    while (global_index < length) {
-        float3 element = buffer[global_index].acceleration;
-        float vit = element.x*element.x + element.y*element.y + element.z*element.z;
-        accumulator = max(accumulator,vit);
-        global_index += get_global_size(0);
+  // Perform parallel reduction
+  int local_index = get_local_id(0);
+  scratch[local_index] = accumulator;
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (int offset = get_local_size(0) / 2; offset > 0; offset = offset / 2) {
+    if (local_index < offset) {
+      float other = scratch[local_index + offset];
+      float mine = scratch[local_index];
+      scratch[local_index] = max(mine, other);
     }
-
-    // Perform parallel reduction
-    int local_index = get_local_id(0);
-    scratch[local_index] = accumulator;
     barrier(CLK_LOCAL_MEM_FENCE);
-    for(int offset = get_local_size(0) / 2;
-        offset > 0;
-        offset = offset / 2) {
-        if (local_index < offset) {
-            float other = scratch[local_index + offset];
-            float mine = scratch[local_index];
-            scratch[local_index] = max(mine,other);
-        }
-        barrier(CLK_LOCAL_MEM_FENCE);
-    }
-    if (local_index == 0) {
-        result[get_group_id(0)] = scratch[0];
-    }
+  }
+  if (local_index == 0) {
+    result[get_group_id(0)] = scratch[0];
+  }
 }
-

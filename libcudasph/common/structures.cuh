@@ -41,16 +41,16 @@ typedef struct {
 } precomputed_kernel_values;
 
 typedef struct {
-    float maxx;
-    float maxy;
-    float maxz;
-    float minx;
-    float miny;
-    float minz;
-    size_t size_x;
-    size_t size_y;
-    size_t size_z;
-    size_t offset;
+  float maxx;
+  float maxy;
+  float maxz;
+  float minx;
+  float miny;
+  float minz;
+  size_t size_x;
+  size_t size_y;
+  size_t size_z;
+  size_t offset;
 } BB;
 
 #endif

@@ -12,8 +12,8 @@
  *
  */
 __device__ uint2 get_start_end_indices_for_cell(uint cell_index,
-                                      const unsigned int* cell_table,
-                                     simulation_parameters params) {
+                                                const unsigned int* cell_table,
+                                                simulation_parameters params) {
   uint2 indices = {
       cell_table[cell_index], (params.grid_cell_count > cell_index + 1)
                                   ? cell_table[cell_index + 1]
@@ -32,10 +32,10 @@ __device__ uint2 get_start_end_indices_for_cell(uint cell_index,
  *information
  * @param[in]  params           Contains the simulation parameters
  */
-__global__ void locate_in_grid( const particle* particles,
-                            particle* out_particles,
-                           simulation_parameters params) {
-  const size_t current_particle_index = blockIdx.x*blockDim.x+threadIdx.x;
+__global__ void locate_in_grid(const particle* particles,
+                               particle* out_particles,
+                               simulation_parameters params) {
+  const size_t current_particle_index = blockIdx.x * blockDim.x + threadIdx.x;
   out_particles[current_particle_index] = particles[current_particle_index];
 
   uint3 position_in_grid = {0, 0, 0};
@@ -57,4 +57,3 @@ __global__ void locate_in_grid( const particle* particles,
 
   out_particles[current_particle_index].grid_index = grid_index;
 }
-

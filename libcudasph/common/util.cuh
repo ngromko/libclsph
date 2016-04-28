@@ -39,7 +39,8 @@ __host__ __device__ uint3 get_cell_coords_z_curve(uint index) {
 }
 
 // http://stackoverflow.com/questions/1024754/how-to-compute-a-3d-morton-number-interleave-the-bits-of-3-ints
-__host__ __device__ uint get_grid_index_z_curve(uint in_x, uint in_y, uint in_z) {
+__host__ __device__ uint
+get_grid_index_z_curve(uint in_x, uint in_y, uint in_z) {
   uint x = in_x;
   uint y = in_y;
   uint z = in_z;

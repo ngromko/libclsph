@@ -1,10 +1,10 @@
 
 
 __device__ float compute_density_with_grid(
-    size_t current_particle_index,  const particle* others,
+    size_t current_particle_index, const particle* others,
     const simulation_parameters params,
     const precomputed_kernel_values smoothing_terms,
-     const unsigned int* grid_cell_particle_list) {
+    const unsigned int* grid_cell_particle_list) {
   float density = 0.f;
 
   uint3 cell_coords =

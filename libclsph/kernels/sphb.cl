@@ -35,8 +35,7 @@ void kernel density_pressure(global const particle* input_data,
 }
 
 void kernel forces(global const particle* input_data,
-                   global particle* output_data,
-                   local particle* local_data,
+                   global particle* output_data, local particle* local_data,
                    const simulation_parameters params,
                    const precomputed_kernel_values smoothing_terms,
                    global const unsigned int* cell_table) {
@@ -46,7 +45,7 @@ void kernel forces(global const particle* input_data,
   const size_t group_size = get_local_size(0);
 
   local_data[local_index] = input_data[current_particle_index];
-  //barrier(CLK_LOCAL_MEM_FENCE);
+  // barrier(CLK_LOCAL_MEM_FENCE);
   output_data[current_particle_index] = local_data[local_index];
 
   particle other;
@@ -65,45 +64,44 @@ void kernel forces(global const particle* input_data,
     for (uint y = cell_coords.y - 1; y <= cell_coords.y + 1; ++y) {
       for (uint x = cell_coords.x - 1; x <= cell_coords.x + 1; ++x) {
         uint grid_index = get_grid_index_z_curve(x, y, z);
-        uint2 indices = get_start_end_indices_for_cell(
-            grid_index, cell_table, params);
+        uint2 indices =
+            get_start_end_indices_for_cell(grid_index, cell_table, params);
 
         for (size_t i = indices.x; i < indices.y; ++i) {
-            //if(group_size*group_index <=i && i < group_size*group_index+group_size){
-            //    other=local_data[i-group_size*group_index];
-            //}else{
-                other=input_data[i];
-            //}
+          // if(group_size*group_index <=i && i <
+          // group_size*group_index+group_size){
+          //    other=local_data[i-group_size*group_index];
+          //}else{
+          other = input_data[i];
+          //}
           if (i != current_particle_index) {
             //[kelager] (4.11)
-            pressure_term +=
-                (other.pressure / pown(other.density, 2) +
-                 local_data[local_index].pressure /
-                     pown(local_data[local_index].density, 2)) *
-                params.particle_mass *
-                spiky_gradient(local_data[local_index].position -
-                                   other.position,
-                               params.h, smoothing_terms);
+            pressure_term += (other.pressure / pown(other.density, 2) +
+                              local_data[local_index].pressure /
+                                  pown(local_data[local_index].density, 2)) *
+                             params.particle_mass *
+                             spiky_gradient(local_data[local_index].position -
+                                                other.position,
+                                            params.h, smoothing_terms);
 
             viscosity_term +=
                 (other.velocity - local_data[local_index].velocity) *
                 (params.particle_mass / other.density) *
                 viscosity_laplacian(
-                    length(local_data[local_index].position -
-                           other.position),
+                    length(local_data[local_index].position - other.position),
                     params.h, smoothing_terms);
           }
 
-          normal += params.particle_mass / other.density *
-                    poly_6_gradient(local_data[local_index].position -
-                                        other.position,
-                                    params.h, smoothing_terms);
+          normal +=
+              params.particle_mass / other.density *
+              poly_6_gradient(local_data[local_index].position - other.position,
+                              params.h, smoothing_terms);
 
           color_field_laplacian +=
               params.particle_mass / other.density *
-              poly_6_laplacian(length(local_data[local_index].position -
-                                      other.position),
-                               params.h, smoothing_terms);
+              poly_6_laplacian(
+                  length(local_data[local_index].position - other.position),
+                  params.h, smoothing_terms);
         }
       }
     }
@@ -118,53 +116,50 @@ void kernel forces(global const particle* input_data,
   }
 
   output_data[current_particle_index].acceleration =
-      sum /local_data[local_index].density;
+      sum / local_data[local_index].density;
 
-  output_data[current_particle_index].acceleration += params.constant_acceleration;
+  output_data[current_particle_index].acceleration +=
+      params.constant_acceleration;
 
   // Copy back the information into the ouput buffer
-  //output_data[current_particle_index] = output_particle;
+  // output_data[current_particle_index] = output_particle;
 }
 
-void kernel advection_collision_const(global const particle* input_data,
-                                global particle* output_data,
-                                const float restitution,
-                                const float time_delta,
-                                const precomputed_kernel_values smoothing_terms,
-                                global const unsigned int* cell_table,
-                                global const float* df,
-                                constant const BB* bboxs,
-                                uint face_count
-                                ) {
+void kernel
+advection_collision_const(global const particle* input_data,
+                          global particle* output_data, const float restitution,
+                          const float time_delta,
+                          const precomputed_kernel_values smoothing_terms,
+                          global const unsigned int* cell_table,
+                          global const float* df, constant const BB* bboxs,
+                          uint face_count) {
   const size_t current_particle_index = get_global_id(0);
   output_data[current_particle_index] = input_data[current_particle_index];
   particle output_particle = input_data[current_particle_index];
 
-  float time_to_go =time_delta;
+  float time_to_go = time_delta;
   collision_response response;
   float3 current_position = input_data[current_particle_index].position;
   float3 current_velocity =
       input_data[current_particle_index].intermediate_velocity;
   float3 acceleration = output_particle.acceleration;
 
-  //do {
-    advection_result res =
-        advect(current_position, current_velocity, acceleration,
-               time_to_go);
+  // do {
+  advection_result res =
+      advect(current_position, current_velocity, acceleration, time_to_go);
 
-    response =
-        handle_collisions_const(
-            res.old_position, res.new_position, res.next_velocity,
-            restitution, time_to_go, df,bboxs, face_count);
+  response = handle_collisions_const(res.old_position, res.new_position,
+                                     res.next_velocity, restitution, time_to_go,
+                                     df, bboxs, face_count);
 
-    current_position = response.position;
-    current_velocity = response.next_velocity;
+  current_position = response.position;
+  current_velocity = response.next_velocity;
 
-    time_to_go -= response.time_elapsed;
+  time_to_go -= response.time_elapsed;
 
-    acceleration.x = 0.f;
-    acceleration.y = 0.f;
-    acceleration.z = 0.f;
+  acceleration.x = 0.f;
+  acceleration.y = 0.f;
+  acceleration.z = 0.f;
 
   //} while (response.collision_happened);
 
@@ -181,43 +176,38 @@ void kernel advection_collision_const(global const particle* input_data,
 
 void kernel advection_collision(global const particle* input_data,
                                 global particle* output_data,
-                                const float restitution,
-                                const float time_delta,
+                                const float restitution, const float time_delta,
                                 const precomputed_kernel_values smoothing_terms,
                                 global const unsigned int* cell_table,
-                                global const float* df,
-                                global const BB* bboxs,
-                                uint face_count
-                                ) {
+                                global const float* df, global const BB* bboxs,
+                                uint face_count) {
   const size_t current_particle_index = get_global_id(0);
   output_data[current_particle_index] = input_data[current_particle_index];
   particle output_particle = input_data[current_particle_index];
 
-  float time_to_go =time_delta;
+  float time_to_go = time_delta;
   collision_response response;
   float3 current_position = input_data[current_particle_index].position;
   float3 current_velocity =
       input_data[current_particle_index].intermediate_velocity;
   float3 acceleration = output_particle.acceleration;
 
-  //do {
-    advection_result res =
-        advect(current_position, current_velocity, acceleration,
-               time_to_go);
+  // do {
+  advection_result res =
+      advect(current_position, current_velocity, acceleration, time_to_go);
 
-    response =
-        handle_collisions(
-            res.old_position, res.new_position, res.next_velocity,
-            restitution, time_to_go, df,bboxs, face_count);
+  response =
+      handle_collisions(res.old_position, res.new_position, res.next_velocity,
+                        restitution, time_to_go, df, bboxs, face_count);
 
-    current_position = response.position;
-    current_velocity = response.next_velocity;
+  current_position = response.position;
+  current_velocity = response.next_velocity;
 
-    time_to_go -= response.time_elapsed;
+  time_to_go -= response.time_elapsed;
 
-    acceleration.x = 0.f;
-    acceleration.y = 0.f;
-    acceleration.z = 0.f;
+  acceleration.x = 0.f;
+  acceleration.y = 0.f;
+  acceleration.z = 0.f;
 
   //} while (response.collision_happened);
 
@@ -231,4 +221,3 @@ void kernel advection_collision(global const particle* input_data,
   // Copy back the information into the ouput buffer
   output_data[current_particle_index] = output_particle;
 }
-

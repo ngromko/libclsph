@@ -6,17 +6,17 @@
 #include <string>
 
 class scene {
-public:
-	bool load(std::string filename, float distFieldThreshold);
+ public:
+  bool load(std::string filename, float distFieldThreshold);
 
-	unsigned int face_count;
-	std::vector<float> face_normals;
-	std::vector<float> vertices;
-	std::vector<unsigned int> indices;
-	std::vector<BB> bbs;
-	std::vector<float> transforms;
-	std::vector<float> rvertices;
-	cl_uint totalGridpoints;
+  unsigned int face_count;
+  std::vector<float> face_normals;
+  std::vector<float> vertices;
+  std::vector<unsigned int> indices;
+  std::vector<BB> bbs;
+  std::vector<float> transforms;
+  std::vector<float> rvertices;
+  cl_uint totalGridpoints;
 };
 
 #endif

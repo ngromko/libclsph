@@ -14,9 +14,9 @@ class sph_simulation {
   simulation_parameters parameters;
   precomputed_kernel_values precomputed_terms;
 
-  std::function<bool(particle*, const simulation_parameters&,bool)> pre_frame;
+  std::function<bool(particle*, const simulation_parameters&, bool)> pre_frame;
   std::function<void(particle*, const simulation_parameters&)> save_frame;
-  std::function<bool(particle*, const simulation_parameters&,bool)> post_frame;
+  std::function<bool(particle*, const simulation_parameters&, bool)> post_frame;
 
   void load_settings(std::string fluid_file_name,
                      std::string parameters_file_name);
@@ -29,12 +29,12 @@ class sph_simulation {
  private:
   void init_particles(particle* buffer, const simulation_parameters&);
   void sort_particles(cl::Buffer&, cl::Buffer&, cl::Buffer&);
-  float simulate_single_frame(cl::Buffer&,cl::Buffer&,float);
+  float simulate_single_frame(cl::Buffer&, cl::Buffer&, float);
   float computeTimeStep(cl::Buffer&);
   void computeDistanceField();
   void findMinMaxPosition(cl::Buffer& input_buffer);
-  bool executePreFrameOpperation(particle *, cl::Buffer&, bool, bool);
-  bool executePostFrameOpperation(particle *, cl::Buffer&, bool, bool);
+  bool executePreFrameOpperation(particle*, cl::Buffer&, bool, bool);
+  bool executePostFrameOpperation(particle*, cl::Buffer&, bool, bool);
 
   cl::Context context_;
   cl::CommandQueue queue_;
@@ -67,8 +67,9 @@ class sph_simulation {
   static const int kBucketCount = 256;
   static const int kRadixWidth = 8;
 
-  //std::array<unsigned int, kSortThreadCount * kBucketCount> sort_count_array_;
-  //cl::Buffer sort_count_buffer_;
+  // std::array<unsigned int, kSortThreadCount * kBucketCount>
+  // sort_count_array_;
+  // cl::Buffer sort_count_buffer_;
 };
 
 #endif

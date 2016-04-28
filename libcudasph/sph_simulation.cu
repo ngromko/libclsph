@@ -17,8 +17,12 @@
 #include "kernels/sph.cu"
 #include "cuda_profiler_api.h"
 
-#define check_cuda_error(error) if(error != cudaSuccess){ std::cerr << "A CUDA error occured (" << __FILE__ << ":" << __LINE__ << ")-> " <<error<< cudaGetErrorString(error) << std::endl; exit(2);}
-
+#define check_cuda_error(error)                                             \
+  if (error != cudaSuccess) {                                               \
+    std::cerr << "A CUDA error occured (" << __FILE__ << ":" << __LINE__    \
+              << ")-> " << error << cudaGetErrorString(error) << std::endl; \
+    exit(2);                                                                \
+  }
 
 const size_t kPreferredWorkGroupSizeMultiple = 32;
 
@@ -52,30 +56,30 @@ void sph_simulation::init_particles(particle* buffer,
   }*/
   // No serialized particle array was found
   // Initialize the particles in their default position
-  //else {
-    for (unsigned int i = 0; i < parameters.particles_count; ++i) {
-      // Arrange the particles in the form of a cube
-      buffer[i].position.x =
-          (float)(i % particles_per_cube_side) * spacing - side_length / 2.f;
-      buffer[i].position.y =
-          ((float)((i / particles_per_cube_side) % particles_per_cube_side) *
-           spacing);
-      buffer[i].position.z =
-          (float)(i / (particles_per_cube_side * particles_per_cube_side)) *
-              spacing -
-          side_length / 2.f;
+  // else {
+  for (unsigned int i = 0; i < parameters.particles_count; ++i) {
+    // Arrange the particles in the form of a cube
+    buffer[i].position.x =
+        (float)(i % particles_per_cube_side) * spacing - side_length / 2.f;
+    buffer[i].position.y =
+        ((float)((i / particles_per_cube_side) % particles_per_cube_side) *
+         spacing);
+    buffer[i].position.z =
+        (float)(i / (particles_per_cube_side * particles_per_cube_side)) *
+            spacing -
+        side_length / 2.f;
 
-      buffer[i].velocity.x = 0.f;
-      buffer[i].velocity.y = 0.f;
-      buffer[i].velocity.z = 0.f;
-      buffer[i].intermediate_velocity.x = 0.f;
-      buffer[i].intermediate_velocity.y = 0.f;
-      buffer[i].intermediate_velocity.z = 0.f;
+    buffer[i].velocity.x = 0.f;
+    buffer[i].velocity.y = 0.f;
+    buffer[i].velocity.z = 0.f;
+    buffer[i].intermediate_velocity.x = 0.f;
+    buffer[i].intermediate_velocity.y = 0.f;
+    buffer[i].intermediate_velocity.z = 0.f;
 
-      buffer[i].density = 0.f;
-      buffer[i].pressure = 0.f;
-    }
+    buffer[i].density = 0.f;
+    buffer[i].pressure = 0.f;
   }
+}
 //}
 
 /**
@@ -83,24 +87,25 @@ void sph_simulation::init_particles(particle* buffer,
  *
  * @param[in] first_buffer       The first OpenCL buffer used
  * @param[in] second_buffer      The second OpenCL buffer used
- * @param[out] cell_table_buffer The OpenCl buffer that contains the start indexes of
+ * @param[out] cell_table_buffer The OpenCl buffer that contains the start
+ *indexes of
  *the cell in the sorted array
  *
  */
 void sph_simulation::sort_particles(particle* first_buffer,
                                     particle* second_buffer,
                                     unsigned int* cell_table_buffer) {
-
   for (int pass_number = 0; pass_number < 4; ++pass_number) {
+    fillUintArray << <kBucketCount, kSortThreadCount>>>
+        (sort_count_buffer_, 0, kSortThreadCount * kBucketCount);
 
-    fillUintArray<<<kBucketCount,kSortThreadCount>>>(
-      sort_count_buffer_,0,kSortThreadCount * kBucketCount);
+    sort_count << <1, kSortThreadCount>>> (first_buffer, sort_count_buffer_,
+                                           parameters, kSortThreadCount,
+                                           pass_number, kRadixWidth);
 
-        sort_count<<<1,kSortThreadCount>>>(first_buffer,sort_count_buffer_,parameters,kSortThreadCount,pass_number,kRadixWidth);
-
-    cudaMemcpy(sort_count_array_.data(),
-        sort_count_buffer_, sizeof(unsigned int) * kSortThreadCount * kBucketCount, cudaMemcpyDeviceToHost
-        );
+    cudaMemcpy(sort_count_array_.data(), sort_count_buffer_,
+               sizeof(unsigned int) * kSortThreadCount * kBucketCount,
+               cudaMemcpyDeviceToHost);
 
     unsigned int running_count = 0;
     for (int i = 0; i < kSortThreadCount * kBucketCount; ++i) {
@@ -109,82 +114,92 @@ void sph_simulation::sort_particles(particle* first_buffer,
       running_count += tmp;
     }
 
-   cudaMemcpy(sort_count_buffer_,sort_count_array_.data(), sizeof(unsigned int) * kSortThreadCount * kBucketCount, cudaMemcpyHostToDevice
-        );
+    cudaMemcpy(sort_count_buffer_, sort_count_array_.data(),
+               sizeof(unsigned int) * kSortThreadCount * kBucketCount,
+               cudaMemcpyHostToDevice);
 
-    sort<<<1,kSortThreadCount>>>(first_buffer, second_buffer,
-                    sort_count_buffer_, parameters, kSortThreadCount,
-                    pass_number, kRadixWidth);
+    sort << <1, kSortThreadCount>>>
+        (first_buffer, second_buffer, sort_count_buffer_, parameters,
+         kSortThreadCount, pass_number, kRadixWidth);
 
     particle* tmp = first_buffer;
     first_buffer = second_buffer;
     second_buffer = tmp;
   }
 
-
-         fillUintArray<<<getNumBlock(parameters.grid_cell_count),size_of_groups>>>(cell_table_buffer,parameters.particles_count,parameters.grid_cell_count);
+  fillUintArray << <getNumBlock(parameters.grid_cell_count), size_of_groups>>>
+      (cell_table_buffer, parameters.particles_count,
+       parameters.grid_cell_count);
 
   // Build the cell table by computing the cumulative sum at every cell.
 
-          fill_cell_table<<<kParticlesBlocks,size_of_groups>>>(first_buffer,cell_table_buffer,parameters.particles_count,parameters.grid_cell_count);
-
+  fill_cell_table << <kParticlesBlocks, size_of_groups>>>
+      (first_buffer, cell_table_buffer, parameters.particles_count,
+       parameters.grid_cell_count);
 }
 
 float sph_simulation::simulate_single_frame(particle* front_buffer,
-                                           particle* back_buffer,
-                                           float dt) {
-
+                                            particle* back_buffer, float dt) {
   findMinMaxPosition(front_buffer);
 
   // Locate each particle in the grid and build the grid count table
-  locate_in_grid<<<kParticlesBlocks,size_of_groups>>>(front_buffer, back_buffer,
-                  parameters);
+  locate_in_grid << <kParticlesBlocks, size_of_groups>>>
+      (front_buffer, back_buffer, parameters);
 
   unsigned int* cell_table_buffer;
-  cudaMalloc((void**)&cell_table_buffer,parameters.grid_cell_count*sizeof(unsigned int));
+  cudaMalloc((void**)&cell_table_buffer,
+             parameters.grid_cell_count * sizeof(unsigned int));
 
   sort_particles(back_buffer, front_buffer, cell_table_buffer);
 
   // Compute the density and the pressure term at every particle.
-  density_pressure<<<kParticlesBlocks,size_of_groups>>>(back_buffer,
-    front_buffer, parameters, precomputed_terms, cell_table_buffer);
+  density_pressure << <kParticlesBlocks, size_of_groups>>>
+      (back_buffer, front_buffer, parameters, precomputed_terms,
+       cell_table_buffer);
 
   // Compute the density-forces at every particle.
- forces<<<kParticlesBlocks,size_of_groups,size_of_groups*sizeof(particle)>>>(
-    front_buffer, back_buffer, parameters, precomputed_terms, cell_table_buffer);
+  forces << <kParticlesBlocks, size_of_groups,
+             size_of_groups * sizeof(particle)>>>
+      (front_buffer, back_buffer, parameters, precomputed_terms,
+       cell_table_buffer);
 
   // Advect particles and resolve collisions with scene geometry.
   float cumputedTime = dt;
-  do{
-      dt= cumputedTime;
-      advection_collision<<<kParticlesBlocks,size_of_groups>>>(
-        back_buffer, front_buffer, parameters.restitution,dt, precomputed_terms, cell_table_buffer,
-        df_buffer_, bb_buffer_, current_scene.face_count);
+  do {
+    dt = cumputedTime;
+    advection_collision << <kParticlesBlocks, size_of_groups>>>
+        (back_buffer, front_buffer, parameters.restitution, dt,
+         precomputed_terms, cell_table_buffer, df_buffer_, bb_buffer_,
+         current_scene.face_count);
 
-      cumputedTime= computeTimeStep(front_buffer);
-  }while(dt-cumputedTime>0.00001);
+    cumputedTime = computeTimeStep(front_buffer);
+  } while (dt - cumputedTime > 0.00001);
 
   cudaFree(cell_table_buffer);
   return cumputedTime;
 }
 
 void sph_simulation::simulate() {
-
   std::thread savet;
 
   bool readParticle = true;
-cudaProfilerStart();
+  cudaProfilerStart();
   particle* front_buffer, *back_buffer;
 
-  cudaMalloc((void**)&front_buffer, sizeof(particle)*parameters.particles_count);
-  cudaMalloc((void**)&back_buffer, sizeof(particle)*parameters.particles_count);
+  cudaMalloc((void**)&front_buffer,
+             sizeof(particle) * parameters.particles_count);
+  cudaMalloc((void**)&back_buffer,
+             sizeof(particle) * parameters.particles_count);
 
-  cudaMalloc((void**)&df_buffer_, sizeof(float)*current_scene.totalGridpoints);
-  cudaMalloc((void**)&bb_buffer_, sizeof(BB)*current_scene.bbs.size());
+  cudaMalloc((void**)&df_buffer_,
+             sizeof(float) * current_scene.totalGridpoints);
+  cudaMalloc((void**)&bb_buffer_, sizeof(BB) * current_scene.bbs.size());
 
-  cudaMemcpy(bb_buffer_,current_scene.bbs.data(),sizeof(BB)*current_scene.bbs.size(),cudaMemcpyHostToDevice);
+  cudaMemcpy(bb_buffer_, current_scene.bbs.data(),
+             sizeof(BB) * current_scene.bbs.size(), cudaMemcpyHostToDevice);
 
-  cudaMalloc((void**)&sort_count_buffer_, sizeof(unsigned int)*kSortThreadCount * kBucketCount);
+  cudaMalloc((void**)&sort_count_buffer_,
+             sizeof(unsigned int) * kSortThreadCount * kBucketCount);
 
   particle* particles = new particle[parameters.particles_count];
   init_particles(particles, parameters);
@@ -192,90 +207,101 @@ cudaProfilerStart();
   //-----------------------------------------------------
   // Initial transfer to the GPU
   //-----------------------------------------------------
-  cudaMemcpy(front_buffer,particles,sizeof(particle)*parameters.particles_count,cudaMemcpyHostToDevice);
+  cudaMemcpy(front_buffer, particles,
+             sizeof(particle) * parameters.particles_count,
+             cudaMemcpyHostToDevice);
 
-  //Get number of groups for reduction
-  cudaDeviceGetAttribute(&size_of_groups,cudaDevAttrMaxThreadsPerBlock,0);
+  // Get number of groups for reduction
+  cudaDeviceGetAttribute(&size_of_groups, cudaDevAttrMaxThreadsPerBlock, 0);
   max_size_of_groups = size_of_groups;
-  cudaDeviceGetAttribute(&max_unit,cudaDevAttrMultiProcessorCount,0);
+  cudaDeviceGetAttribute(&max_unit, cudaDevAttrMultiProcessorCount, 0);
   int maxLocalMem;
-  cudaDeviceGetAttribute(&maxLocalMem, cudaDevAttrMaxSharedMemoryPerBlock,0);
-    // Calculate the optimal size for workgroups
+  cudaDeviceGetAttribute(&maxLocalMem, cudaDevAttrMaxSharedMemoryPerBlock, 0);
+  // Calculate the optimal size for workgroups
 
   // Start groups size at their maximum, make them smaller if necessary
   // Optimally parameters.particles_count should be devisible by
   // CL_DEVICE_MAX_WORK_GROUP_SIZE
   // Refer to CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE
-  while((parameters.particles_count%size_of_groups!=0) || (size_of_groups*sizeof(particle) > maxLocalMem))
-  {
+  while ((parameters.particles_count % size_of_groups != 0) ||
+         (size_of_groups * sizeof(particle) > maxLocalMem)) {
     size_of_groups /= 2;
   }
 
-  kParticlesBlocks = parameters.particles_count/size_of_groups;
+  kParticlesBlocks = parameters.particles_count / size_of_groups;
 
-  //Make sure that the workgroups are small enough and that the particle data will fit in local memory
-  assert(size_of_groups <= max_size_of_groups );
-  assert(size_of_groups*sizeof(particle) <= maxLocalMem);
+  // Make sure that the workgroups are small enough and that the particle data
+  // will fit in local memory
+  assert(size_of_groups <= max_size_of_groups);
+  assert(size_of_groups * sizeof(particle) <= maxLocalMem);
 
   float time = 0.0;
-  float timeperframe = 1.0f/parameters.target_fps;
+  float timeperframe = 1.0f / parameters.target_fps;
   int currentFrame = 2;
-  float dt = timeperframe*parameters.simulation_scale;
+  float dt = timeperframe * parameters.simulation_scale;
 
   computeDistanceField();
 
-  if(save_frame){
-    savet = std::thread([=] { save_frame(particles,parameters); });
+  if (save_frame) {
+    savet = std::thread([=] { save_frame(particles, parameters); });
   }
 
-  while(time<parameters.simulation_time)
-  {
-    std::cout << "Simulating frame " << currentFrame << " (" << time<< "s)" << std::endl;
+  while (time < parameters.simulation_time) {
+    std::cout << "Simulating frame " << currentFrame << " (" << time << "s)"
+              << std::endl;
 
     if (!write_intermediate_frames && pre_frame) {
-        readParticle = executePreFrameOpperation(particles,front_buffer,readParticle,true);
+      readParticle = executePreFrameOpperation(particles, front_buffer,
+                                               readParticle, true);
     }
 
-    float timeleft=timeperframe;
-    while(timeleft > 0.0) {
-      if (write_intermediate_frames && pre_frame){
-         readParticle = executePreFrameOpperation(particles,front_buffer,readParticle,false);
+    float timeleft = timeperframe;
+    while (timeleft > 0.0) {
+      if (write_intermediate_frames && pre_frame) {
+        readParticle = executePreFrameOpperation(particles, front_buffer,
+                                                 readParticle, false);
       }
-      readParticle=true;
-      dt=simulate_single_frame(front_buffer,back_buffer,dt);
+      readParticle = true;
+      dt = simulate_single_frame(front_buffer, back_buffer, dt);
       check_cuda_error(cudaGetLastError());
-      timeleft-=dt;
-      if(timeleft<dt){
-          dt=timeleft;
+      timeleft -= dt;
+      if (timeleft < dt) {
+        dt = timeleft;
       }
-      std::cout<<"temps restant pour la frame :"<<timeleft<<std::endl;
-      if(save_frame && write_intermediate_frames){
-        cudaMemcpy(particles,front_buffer,sizeof(particle)*parameters.particles_count,cudaMemcpyDeviceToHost);
+      std::cout << "temps restant pour la frame :" << timeleft << std::endl;
+      if (save_frame && write_intermediate_frames) {
+        cudaMemcpy(particles, front_buffer,
+                   sizeof(particle) * parameters.particles_count,
+                   cudaMemcpyDeviceToHost);
         readParticle = false;
         savet.join();
 
-        savet = std::thread([=] { save_frame(particles,parameters); });
+        savet = std::thread([=] { save_frame(particles, parameters); });
       }
-      if (write_intermediate_frames && post_frame){
-          readParticle = executePostFrameOpperation(particles,front_buffer,readParticle,false);
+      if (write_intermediate_frames && post_frame) {
+        readParticle = executePostFrameOpperation(particles, front_buffer,
+                                                  readParticle, false);
       }
     }
-    time+=timeperframe;
+    time += timeperframe;
 
     ++currentFrame;
 
-    if(!write_intermediate_frames && save_frame){
-      cudaMemcpy(particles,front_buffer,sizeof(particle)*parameters.particles_count,cudaMemcpyDeviceToHost);
+    if (!write_intermediate_frames && save_frame) {
+      cudaMemcpy(particles, front_buffer,
+                 sizeof(particle) * parameters.particles_count,
+                 cudaMemcpyDeviceToHost);
       readParticle = false;
       savet.join();
-      savet = std::thread([=] { save_frame(particles,parameters); });
+      savet = std::thread([=] { save_frame(particles, parameters); });
     }
 
     if (!write_intermediate_frames && post_frame) {
-      readParticle = executePostFrameOpperation(particles,front_buffer,readParticle,true);
+      readParticle = executePostFrameOpperation(particles, front_buffer,
+                                                readParticle, true);
     }
   }
-  if(save_frame){
+  if (save_frame) {
     savet.join();
   }
   cudaFree(df_buffer_);
@@ -296,11 +322,11 @@ void sph_simulation::load_settings(std::string fluid_file_name,
     std::ifstream fluid_stream(fluid_file_name);
 
     std::string err = picojson::parse(fluid_params, fluid_stream);
-    if (! err.empty()) {
+    if (!err.empty()) {
       std::cerr << err << std::endl;
     }
 
-    if (! fluid_params.is<picojson::object>()) {
+    if (!fluid_params.is<picojson::object>()) {
       std::cerr << fluid_file_name << " is not an JSON object" << std::endl;
       exit(2);
     }
@@ -339,12 +365,13 @@ void sph_simulation::load_settings(std::string fluid_file_name,
     std::ifstream sim_stream(parameters_file_name);
 
     std::string err = picojson::parse(sim_params, sim_stream);
-    if (! err.empty()) {
+    if (!err.empty()) {
       std::cerr << err << std::endl;
     }
 
-    if (! sim_params.is<picojson::object>()) {
-      std::cerr << parameters_file_name << " is not an JSON object" << std::endl;
+    if (!sim_params.is<picojson::object>()) {
+      std::cerr << parameters_file_name << " is not an JSON object"
+                << std::endl;
       exit(2);
     }
 
@@ -370,7 +397,8 @@ void sph_simulation::load_settings(std::string fluid_file_name,
     parameters.target_fps =
         (float)(sim_params.get<picojson::object>()["target_fps"].get<double>());
     parameters.simulation_scale =
-        (float)(sim_params.get<picojson::object>()["simulation_scale"].get<double>());
+        (float)(sim_params.get<picojson::object>()["simulation_scale"]
+                    .get<double>());
 
     parameters.constant_acceleration.x =
         (float)(sim_params.get<picojson::object>()["constant_acceleration"]
@@ -407,186 +435,204 @@ void sph_simulation::load_settings(std::string fluid_file_name,
 
 //--------------------------------------------------------------------------------------------------
 // computeTimeStep
-float sph_simulation::computeTimeStep(particle* input_buffer)
-{
-    // Find maximum velocity and acceleration
-    float redresult[max_unit];
-    float* reducResult;
+float sph_simulation::computeTimeStep(particle* input_buffer) {
+  // Find maximum velocity and acceleration
+  float redresult[max_unit];
+  float* reducResult;
 
-    cudaMalloc((void**)&reducResult, sizeof(float) * max_unit);
+  cudaMalloc((void**)&reducResult, sizeof(float) * max_unit);
 
-    //-----------------------------------------------------
-    // Find maximum speed
-    //-----------------------------------------------------
-    maximum_vit<<<max_unit,max_size_of_groups,max_size_of_groups*sizeof(float)>>>(
-      input_buffer, parameters.particles_count, reducResult);
+  //-----------------------------------------------------
+  // Find maximum speed
+  //-----------------------------------------------------
+  maximum_vit << <max_unit, max_size_of_groups,
+                  max_size_of_groups * sizeof(float)>>>
+      (input_buffer, parameters.particles_count, reducResult);
 
-    cudaMemcpy(
-        redresult,reducResult, sizeof(float) * max_unit, cudaMemcpyDeviceToHost);
+  cudaMemcpy(redresult, reducResult, sizeof(float) * max_unit,
+             cudaMemcpyDeviceToHost);
 
+  for (size_t i = 1; i < max_unit; ++i) {
+    if (redresult[i] > redresult[0]) redresult[0] = redresult[i];
+  }
 
-    for(size_t i = 1; i < max_unit; ++i) {
-        if(redresult[i] > redresult[0]) redresult[0]= redresult[i];
-    }
+  float maxVel2 = redresult[0];
+  float maxVel = sqrt(redresult[0]);
 
-    float maxVel2 = redresult[0];
-    float maxVel = sqrt(redresult[0]);
+  //-----------------------------------------------------
+  // Find maximum acceleration
+  //-----------------------------------------------------
+  maximum_accel << <max_unit, max_size_of_groups,
+                    max_size_of_groups * sizeof(float)>>>
+      (input_buffer, parameters.particles_count, reducResult);
 
-    //-----------------------------------------------------
-    // Find maximum acceleration
-    //-----------------------------------------------------
-    maximum_accel<<<max_unit,max_size_of_groups,max_size_of_groups*sizeof(float)>>>(
-      input_buffer, parameters.particles_count, reducResult);
+  cudaMemcpy(redresult, reducResult, sizeof(float) * max_unit,
+             cudaMemcpyDeviceToHost);
 
-    cudaMemcpy(
-        redresult,reducResult, sizeof(float) * max_unit, cudaMemcpyDeviceToHost);
+  for (size_t i = 1; i < max_unit; ++i) {
+    if (redresult[i] > redresult[0]) redresult[0] = redresult[i];
+  }
 
-    for(size_t i = 1; i < max_unit; ++i) {
-        if(redresult[i] > redresult[0]) redresult[0]= redresult[i];
-    }
+  float maxAccel = sqrt(redresult[0]);
 
-    float maxAccel = sqrt(redresult[0]);
+  // if(maxVel>15)
+  // std::cin.ignore();
 
-    //if(maxVel>15)
-    //std::cin.ignore();
+  // Compute timestep
+  // float speedOfSound = sqrt(parameters.K);
+  // float tf = sqrt(parameters.h / maxAccel);
+  // float tcv = parameters.h / (speedOfSound + 0.6*(speedOfSound +
+  // 2.0/_maxuij));
+  // float _dt = (tf < tcv) ? tf : tcv;
+  float dt =
+      (sqrt(2 * maxAccel * parameters.h + maxVel2) - maxVel) / (2 * maxAccel);
+  // Clamp time step
+  if (dt < 0.00001) dt = 0.00001;
+  if (dt > 1.0f / (parameters.target_fps) * parameters.simulation_scale)
+    dt = 1.0f / (parameters.target_fps) * parameters.simulation_scale;
 
-    // Compute timestep
-    //float speedOfSound = sqrt(parameters.K);
-    //float tf = sqrt(parameters.h / maxAccel);
-    //float tcv = parameters.h / (speedOfSound + 0.6*(speedOfSound + 2.0/_maxuij));
-    //float _dt = (tf < tcv) ? tf : tcv;
-    float dt = (sqrt(2*maxAccel*parameters.h+maxVel2)-maxVel)/(2*maxAccel);
-    // Clamp time step
-    if (dt < 0.00001) dt = 0.00001;
-    if (dt > 1.0f/(parameters.target_fps)*parameters.simulation_scale) dt = 1.0f/(parameters.target_fps)*parameters.simulation_scale;
-
-    cudaFree(reducResult);
-    return dt;
+  cudaFree(reducResult);
+  return dt;
 }
 
-void sph_simulation::computeDistanceField(){
-
+void sph_simulation::computeDistanceField() {
   float* trans;
   cudaMalloc((void**)&trans, sizeof(float) * current_scene.transforms.size());
 
   float* rvert;
   cudaMalloc((void**)&rvert, sizeof(float) * current_scene.rvertices.size());
 
-  cudaMemcpy(trans,current_scene.transforms.data(), sizeof(float) * current_scene.transforms.size(),cudaMemcpyHostToDevice);
+  cudaMemcpy(trans, current_scene.transforms.data(),
+             sizeof(float) * current_scene.transforms.size(),
+             cudaMemcpyHostToDevice);
 
-  cudaMemcpy(rvert,current_scene.rvertices.data(), sizeof(float) * current_scene.rvertices.size(),cudaMemcpyHostToDevice);
+  cudaMemcpy(rvert, current_scene.rvertices.data(),
+             sizeof(float) * current_scene.rvertices.size(),
+             cudaMemcpyHostToDevice);
 
-  kernelComputeDistanceField<<<getNumBlock(current_scene.totalGridpoints),size_of_groups>>>(
-    df_buffer_, bb_buffer_, trans, rvert, current_scene.face_count, current_scene.totalGridpoints);
+  kernelComputeDistanceField
+          << <getNumBlock(current_scene.totalGridpoints), size_of_groups>>>
+      (df_buffer_, bb_buffer_, trans, rvert, current_scene.face_count,
+       current_scene.totalGridpoints);
 
   cudaFree(trans);
   cudaFree(rvert);
 }
 
-void sph_simulation::findMinMaxPosition(particle* input_buffer){
+void sph_simulation::findMinMaxPosition(particle* input_buffer) {
+  float3 redresult[max_unit];
+  float3* reducResult;
+  float grid_cell_side_length = (parameters.h * 2);
 
-    float3 redresult[max_unit];
-    float3* reducResult;
-    float grid_cell_side_length = (parameters.h * 2);
+  cudaMalloc((void**)&reducResult, sizeof(float3) * max_unit);
 
-    cudaMalloc((void**)&reducResult, sizeof(float3) * max_unit);
+  //-----------------------------------------------------
+  // Find minimum postion
+  //-----------------------------------------------------
+  minimum_pos << <max_unit, max_size_of_groups,
+                  max_size_of_groups * sizeof(float3)>>>
+      (input_buffer, parameters.particles_count, reducResult);
 
-    //-----------------------------------------------------
-    // Find minimum postion
-    //-----------------------------------------------------
-    minimum_pos<<<max_unit,max_size_of_groups,max_size_of_groups*sizeof(float3)>>>(
-      input_buffer, parameters.particles_count, reducResult);
+  cudaMemcpy(redresult, reducResult, sizeof(float3) * max_unit,
+             cudaMemcpyDeviceToHost);
 
-    cudaMemcpy(
-        redresult,reducResult, sizeof(float3) * max_unit, cudaMemcpyDeviceToHost);
+  for (size_t i = 1; i < max_unit; ++i) {
+    if (redresult[i].x < redresult[0].x) redresult[0].x = redresult[i].x;
+    if (redresult[i].y < redresult[0].y) redresult[0].y = redresult[i].y;
+    if (redresult[i].z < redresult[0].z) redresult[0].z = redresult[i].z;
+  }
 
-    for(size_t i = 1; i < max_unit; ++i) {
+  // Subtracts a cell length to all sides to create a padding layer
+  // This simplifies calculations further down the line
+  parameters.min_point.x = redresult[0].x - 2 * grid_cell_side_length;
+  parameters.min_point.y = redresult[0].y - 2 * grid_cell_side_length;
+  parameters.min_point.z = redresult[0].z - 2 * grid_cell_side_length;
 
-        if(redresult[i].x < redresult[0].x) redresult[0].x = redresult[i].x;
-        if(redresult[i].y < redresult[0].y) redresult[0].y = redresult[i].y;
-        if(redresult[i].z < redresult[0].z) redresult[0].z = redresult[i].z;
-    }
+  maximum_pos << <max_unit, max_size_of_groups,
+                  max_size_of_groups * sizeof(float3)>>>
+      (input_buffer, parameters.particles_count, reducResult);
 
-    // Subtracts a cell length to all sides to create a padding layer
-    // This simplifies calculations further down the line
-    parameters.min_point.x = redresult[0].x - 2*grid_cell_side_length;
-    parameters.min_point.y = redresult[0].y - 2*grid_cell_side_length;
-    parameters.min_point.z = redresult[0].z - 2*grid_cell_side_length;
+  cudaMemcpy(redresult, reducResult, sizeof(float3) * max_unit,
+             cudaMemcpyDeviceToHost);
 
-    maximum_pos<<<max_unit,max_size_of_groups,max_size_of_groups*sizeof(float3)>>>(
-      input_buffer, parameters.particles_count, reducResult);
+  for (size_t i = 1; i < max_unit; ++i) {
+    if (redresult[i].x > redresult[0].x) redresult[0].x = redresult[i].x;
+    if (redresult[i].y > redresult[0].y) redresult[0].y = redresult[i].y;
+    if (redresult[i].z > redresult[0].z) redresult[0].z = redresult[i].z;
+  }
 
-    cudaMemcpy(
-        redresult,reducResult, sizeof(float3) * max_unit, cudaMemcpyDeviceToHost);
+  // Adds a cell length to all sides to create a padding layer
+  // This simplifies calculations further down the line
+  parameters.max_point.x = redresult[0].x + 2 * grid_cell_side_length;
+  parameters.max_point.y = redresult[0].y + 2 * grid_cell_side_length;
+  parameters.max_point.z = redresult[0].z + 2 * grid_cell_side_length;
 
-    for(size_t i = 1; i < max_unit; ++i) {
-        if(redresult[i].x > redresult[0].x) redresult[0].x = redresult[i].x;
-        if(redresult[i].y > redresult[0].y) redresult[0].y = redresult[i].y;
-        if(redresult[i].z > redresult[0].z) redresult[0].z = redresult[i].z;
-    }
+  //-----------------------------------------------------
+  // Recalculate the boundaries of the grid since the particles probably moved
+  // since the last frame.
+  //-----------------------------------------------------
 
-    // Adds a cell length to all sides to create a padding layer
-    // This simplifies calculations further down the line
-    parameters.max_point.x = redresult[0].x + 2*grid_cell_side_length;
-    parameters.max_point.y = redresult[0].y + 2*grid_cell_side_length;
-    parameters.max_point.z = redresult[0].z + 2*grid_cell_side_length;
+  parameters.grid_size_x = static_cast<unsigned int>(
+      (parameters.max_point.x - parameters.min_point.x) /
+      (grid_cell_side_length));
+  parameters.grid_size_y = static_cast<unsigned int>(
+      (parameters.max_point.y - parameters.min_point.y) /
+      (grid_cell_side_length));
+  parameters.grid_size_z = static_cast<unsigned int>(
+      (parameters.max_point.z - parameters.min_point.z) /
+      (grid_cell_side_length));
 
-    //-----------------------------------------------------
-    // Recalculate the boundaries of the grid since the particles probably moved
-    // since the last frame.
-    //-----------------------------------------------------
+  // The Z-curve uses interleaving of bits in a uint to caculate the index.
+  // This means we have floor(32/dimension_count) bits to represent each
+  // dimension.
+  assert(parameters.grid_size_x < 1024);
+  assert(parameters.grid_size_y < 1024);
+  assert(parameters.grid_size_z < 1024);
 
-    parameters.grid_size_x = static_cast<unsigned int>((parameters.max_point.x - parameters.min_point.x) / (grid_cell_side_length));
-    parameters.grid_size_y = static_cast<unsigned int>((parameters.max_point.y - parameters.min_point.y) / (grid_cell_side_length));
-    parameters.grid_size_z = static_cast<unsigned int>((parameters.max_point.z - parameters.min_point.z) / (grid_cell_side_length));
-
-
-    // The Z-curve uses interleaving of bits in a uint to caculate the index.
-    // This means we have floor(32/dimension_count) bits to represent each
-    // dimension.
-    assert(parameters.grid_size_x < 1024);
-    assert(parameters.grid_size_y < 1024);
-    assert(parameters.grid_size_z < 1024);
-
-    parameters.grid_cell_count = get_grid_index_z_curve(
-        parameters.grid_size_x,
-        parameters.grid_size_y,
-        parameters.grid_size_z
-    );
-    cudaFree(reducResult);
+  parameters.grid_cell_count = get_grid_index_z_curve(
+      parameters.grid_size_x, parameters.grid_size_y, parameters.grid_size_z);
+  cudaFree(reducResult);
 }
 
-bool sph_simulation::executePreFrameOpperation(particle* particles, particle* buffer, bool readParticle, bool isFullFrame){
-
-    //Only read particle if not already done
-    if(readParticle){
-        cudaMemcpy(particles,buffer,sizeof(particle)*parameters.particles_count,cudaMemcpyDeviceToHost);
-        readParticle=false;
-    }
-    //Only write particle id needed
-  if(pre_frame(particles, parameters,isFullFrame)){
-      cudaMemcpy(buffer,particles,sizeof(particle)*parameters.particles_count,cudaMemcpyHostToDevice);
+bool sph_simulation::executePreFrameOpperation(particle* particles,
+                                               particle* buffer,
+                                               bool readParticle,
+                                               bool isFullFrame) {
+  // Only read particle if not already done
+  if (readParticle) {
+    cudaMemcpy(particles, buffer, sizeof(particle) * parameters.particles_count,
+               cudaMemcpyDeviceToHost);
+    readParticle = false;
+  }
+  // Only write particle id needed
+  if (pre_frame(particles, parameters, isFullFrame)) {
+    cudaMemcpy(buffer, particles, sizeof(particle) * parameters.particles_count,
+               cudaMemcpyHostToDevice);
   }
   return readParticle;
 }
 
-bool sph_simulation::executePostFrameOpperation(particle* particles, particle* buffer, bool readParticle, bool isFullFrame){
-
-    //Only read particle if not already done
-    if(readParticle){
-        cudaMemcpy(particles,buffer,sizeof(particle)*parameters.particles_count,cudaMemcpyDeviceToHost);
-        readParticle=false;
-    }
-    //Only write particle id needed
-  if(post_frame(particles, parameters,isFullFrame)){
-      cudaMemcpy(buffer,particles,sizeof(particle)*parameters.particles_count,cudaMemcpyHostToDevice);
+bool sph_simulation::executePostFrameOpperation(particle* particles,
+                                                particle* buffer,
+                                                bool readParticle,
+                                                bool isFullFrame) {
+  // Only read particle if not already done
+  if (readParticle) {
+    cudaMemcpy(particles, buffer, sizeof(particle) * parameters.particles_count,
+               cudaMemcpyDeviceToHost);
+    readParticle = false;
+  }
+  // Only write particle id needed
+  if (post_frame(particles, parameters, isFullFrame)) {
+    cudaMemcpy(buffer, particles, sizeof(particle) * parameters.particles_count,
+               cudaMemcpyHostToDevice);
   }
   return readParticle;
 }
 
-int sph_simulation::getNumBlock(unsigned int numThreads){
-  if(numThreads%kPreferredWorkGroupSizeMultiple==0)
-      return numThreads/size_of_groups;
+int sph_simulation::getNumBlock(unsigned int numThreads) {
+  if (numThreads % kPreferredWorkGroupSizeMultiple == 0)
+    return numThreads / size_of_groups;
   else
-      return numThreads/size_of_groups +1;
+    return numThreads / size_of_groups + 1;
 }

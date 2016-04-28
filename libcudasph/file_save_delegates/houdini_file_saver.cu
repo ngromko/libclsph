@@ -64,9 +64,7 @@ int houdini_file_saver::writeFrameToFile(
     houdini_Particles[i].mass = parameters.particle_mass;
   }
 
-  std::ofstream fichier(
-              fileName,
-              std::ios::out | std::ios::trunc);
+  std::ofstream fichier(fileName, std::ios::out | std::ios::trunc);
   if (fichier.is_open()) {
     ConcreteDataProvider dataProvider(houdini_Particles,
                                       parameters.particles_count);
