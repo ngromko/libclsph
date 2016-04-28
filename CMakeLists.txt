@@ -79,7 +79,7 @@ find_package(CUDA)
 
 if(CUDA_FOUND)
 
-    list(APPEND CUDA_NVCC_FLAGS "-std=c++11;-O2;-g")
+    list(APPEND CUDA_NVCC_FLAGS "-std=c++11;-O2;-g;-maxrregcount 64")
     SET(CUDA_PROPAGATE_HOST_FLAGS ON)
 
     # Copy headers
